@@ -34,6 +34,7 @@ case "$1" in
     shift; files="$*"
     echo "$files" | tr ' ' '\n' | grep -q '^app/.*\.js$' && timed "types de app/ (tsc)" bunx tsc -p jsconfig.json
     ts=$(echo "$files" | tr ' ' '\n' | grep -E '\.ts$' | while read -r f; do [ -f "$f" ] && echo "$f"; done | tr '\n' ' ')
+    # shellcheck disable=SC2086  # $ts doit se scinder en un chemin par argument pour bun build
     [ -n "$ts" ] && timed "syntaxe TypeScript" tscheck $ts
     echo "$files" | tr ' ' '\n' | grep -q '\.py$' && timed "ruff (plugin et tests)" ruff check plugins test
     echo "$files" | tr ' ' '\n' | grep -qE '^(app/|test/contract|test/fixtures/contracts)' && timed "contrats RPC (instantané)" bun run check

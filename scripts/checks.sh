@@ -11,13 +11,22 @@ die() { echo "REFUSÉ ($1) : $2" >&2; exit 1; }
 tscheck() { bun build --no-bundle "$@" --outdir "${TMPDIR:-/tmp}/hbp-tscheck" >/dev/null; }
 timed() { name=$1; shift; t=$(date +%s); "$@" || die "$name" "échec ci-dessus"; d=$(( $(date +%s) - t )); echo "  ok  $name (${d} s)"; [ "$d" -le 30 ] || die "$name" "${d} s : un contrôle de plus de 30 s est un mauvais contrôle, à découper ou accélérer"; }
 
+# Un clone public n'a qu'un worktree : c'est le dépôt de celui qui contribue, pas la copie servie.
+# Le garde-fou « copie servie » et l'outillage obligatoire ne s'appliquent qu'au dépôt à plusieurs worktrees.
+is_clone() { [ "$(git worktree list --porcelain | grep -c '^worktree ')" -le 1 ]; }
+
 case "$1" in
   served)
     served=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
-    [ -z "$CI" ] && [ "$ROOT" = "$served" ] && die "copie servie" "$ROOT est la copie servie (prod). Travaille dans un worktree ; ici on fait seulement git pull via la release."
+    if [ -z "$CI" ] && ! is_clone && [ "$ROOT" = "$served" ]; then
+      die "copie servie" "$ROOT est la copie servie (prod). Travaille dans un worktree ; ici on fait seulement git pull via la release."
+    fi
     echo "  ok  hors de la copie servie" ;;
   secrets)
-    command -v gitleaks >/dev/null || die "secrets" "gitleaks absent : brew install gitleaks"
+    if ! command -v gitleaks >/dev/null; then
+      if [ -z "$CI" ] && is_clone; then echo "  ~   gitleaks absent : contrôle des secrets ignoré (brew install gitleaks pour l'activer)"; exit 0
+      else die "secrets" "gitleaks absent : brew install gitleaks"; fi
+    fi
     if git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' | grep -v '\.example$' >/dev/null; then die "secrets" "un fichier .env est indexé"; fi
     if [ "$2" = all ]; then timed "gitleaks (historique)" gitleaks git --no-banner --log-level warn --redact .
     else timed "gitleaks (index)" gitleaks git --no-banner --log-level warn --redact --staged --pre-commit .; fi ;;

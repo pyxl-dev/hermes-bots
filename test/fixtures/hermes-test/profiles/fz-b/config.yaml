@@ -1,0 +1,15 @@
+# Profil SANS MODÈLE : ses tours vont au faux modèle déterministe de test/fake-model.ts (127.0.0.1:9331), lancé par
+# group-journey --part restart (fx-* : parallel 9329, fy-* : fil 9330). Aucun appel réseau, aucun quota.
+model:
+  default: faux-modele
+  provider: custom
+  base_url: http://127.0.0.1:9331/v1
+  api_key: faux
+  api_mode: chat_completions
+agent:
+  max_turns: 6
+plugins:
+  enabled:
+    - model-guard
+    - bot-groups
+  disabled: []

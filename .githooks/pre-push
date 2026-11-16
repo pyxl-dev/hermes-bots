@@ -1,0 +1,8 @@
+#!/bin/sh
+# Avant chaque push : APP_VERSION, smoke sur le mock et versions figées (chacun sous 30 s).
+set -e
+C="sh $(git rev-parse --show-toplevel)/scripts/checks.sh"
+git fetch -q origin main 2>/dev/null || true
+$C version origin/main
+$C smoke
+$C releases

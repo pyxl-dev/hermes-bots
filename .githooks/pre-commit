@@ -1,0 +1,7 @@
+#!/bin/sh
+# Avant chaque commit, sur les fichiers indexés seulement (moins de 5 s en général). Contourner : jamais.
+set -e
+C="sh $(git rev-parse --show-toplevel)/scripts/checks.sh"
+$C served
+$C secrets
+$C static $(git diff --cached --name-only --diff-filter=ACMR)

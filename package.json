@@ -1,0 +1,25 @@
+{
+  "name": "hermes-bots-pwa",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "web-push": "3.6.7"
+  },
+  "scripts": {
+    "check": "bun test/contract-check.ts",
+    "typecheck": "tsc -p jsconfig.json",
+    "smoke": "bun test/smoke.ts",
+    "release": "bun scripts/release.ts",
+    "stage": "bun server.ts stage",
+    "promote": "bun server.ts promote",
+    "rollback": "bun server.ts rollback",
+    "check:snapshot": "sh test/contract-check.sh snapshot",
+    "check:fresh": "sh test/contract-check.sh fresh",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true"
+  },
+  "devDependencies": {
+    "playwright-core": "1.64.1",
+    "typescript": "^7.0.2"
+  }
+}

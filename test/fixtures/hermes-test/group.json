@@ -1,0 +1,2 @@
+{ "name": "Test enchaînement", "lead": "chiffres", "members": ["chiffres", "travel-prep", "visuels"],
+  "purpose": "Groupe de test automatique de l'enchaînement des bots (test/group-journey.ts). Réponses courtes." }

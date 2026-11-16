@@ -8,8 +8,6 @@ MIT. Le code est à toi, tu peux l'héberger chez toi.
 
 > **Bêta.** Aucun support promis. Les issues sont lues, les demandes de fonctionnalité ne sont pas des engagements. Le cœur est sous licence MIT ; l'hébergement pour d'autres est un travail séparé, pas une promesse de ce dépôt.
 
-Chaîne : <!-- URL de la chaîne à poser ici avant la publication -->
-
 
 ## Essayer en deux minutes, sans rien installer d'autre
 

@@ -1,0 +1,44 @@
+# CI : les mêmes contrôles que les hooks git (scripts/checks.sh), sur chaque PR et chaque push vers main.
+# Chaque contrôle tient sous 30 s (checks.sh échoue au-delà) ; seules les installations sont hors budget.
+# Les parcours sur le gateway de test restent locaux, dans `bun run release` (ils ont besoin de Hermes et d'une clé).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  controles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - name: Installation (bun, gitleaks, ruff)
+        run: |
+          bun install --frozen-lockfile
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
+          pipx install ruff==0.17.5
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - name: Chromium headless (installation)
+        run: bunx playwright-core install --with-deps chromium-headless-shell
+      - name: Secrets (tout l'historique)
+        run: sh scripts/checks.sh secrets all
+      - name: Types, syntaxe, ruff, contrats
+        run: sh scripts/checks.sh static $(git ls-files 'app/*.js' '*.ts' '*.py' | tr '\n' ' ')
+      - name: APP_VERSION
+        run: sh scripts/checks.sh version origin/main
+        if: github.event_name == 'pull_request'
+      - name: Smoke sur le mock
+        run: sh scripts/checks.sh smoke
+      - name: Versions figées
+        run: sh scripts/checks.sh releases

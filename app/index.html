@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <base href="/bots/">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Hermes Bots</title>
+  <meta name="theme-color" content="#0A0A0A">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <section id="roster" class="view">
+    <header class="bar top">
+      <h1>Bots</h1>
+      <span id="conn" class="conn" title="Connexion"><i></i><b></b></span>
+      <button id="settings-btn" class="icon-btn" type="button" aria-label="Réglages"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
+      <button id="new-group" class="icon-btn plus" type="button" aria-label="Nouveau groupe" hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+    </header>
+    <div class="search"><label><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" type="search" placeholder="Rechercher un bot ou un groupe" aria-label="Rechercher" autocomplete="off"></label></div>
+    <div class="lists">
+      <h2 id="pins-h" class="sect" hidden>Épinglés</h2>
+      <div id="pins" class="pins"></div>
+      <p id="pins-live" class="pins-live" hidden></p>
+      <h2 id="groups-h" class="sect" hidden>Groupes</h2>
+      <ul id="groups" class="bots"></ul>
+      <p id="groups-msg" class="msg small"></p>
+      <h2 class="sect">Conversations</h2>
+      <ul id="bots" class="bots"></ul>
+      <p class="hint">Appui long sur un bot ou un groupe pour l’épingler</p>
+    </div>
+    <p id="roster-msg" class="msg"></p>
+  </section>
+
+  <section id="settings" class="view" hidden>
+    <header class="bar">
+      <button id="set-back" class="icon-btn" type="button" aria-label="Retour"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+      <h1>Réglages</h1>
+    </header>
+    <div class="page-body">
+      <h2 class="sect">Notifications sur cet appareil</h2>
+      <div class="card">
+        <div class="srow"><span class="lbl"><b>Mentions @yoan</b><small id="nf-state"></small></span><button id="nf-toggle" class="switch" type="button" role="switch" aria-checked="false" aria-label="Notifications des mentions"></button></div>
+        <div class="srow"><span class="lbl"><b>Ce téléphone</b><small id="nf-msg">Envoie une notification d’essai</small></span><button id="nf-test" class="pill g s" type="button">Tester</button></div>
+      </div>
+      <div id="teams-set" hidden>
+        <h2 class="sect">Équipes</h2>
+        <div class="card">
+          <div class="srow"><span class="lbl"><b>Bots par groupe</b><small>au plus, de 2 à 16</small></span><div class="step"><button type="button" data-t="ts-members" data-s="-1" aria-label="Moins">−</button><input id="ts-members" type="number" inputmode="numeric" min="2" max="16" aria-label="Bots par groupe"><button type="button" data-t="ts-members" data-s="1" aria-label="Plus">+</button></div></div>
+          <div class="srow"><span class="lbl"><b>Tours de discussion</b><small>de 1 à 10</small></span><div class="step"><button type="button" data-t="ts-rounds" data-s="-1" aria-label="Moins">−</button><input id="ts-rounds" type="number" inputmode="numeric" min="1" max="10" aria-label="Tours de discussion"><button type="button" data-t="ts-rounds" data-s="1" aria-label="Plus">+</button></div></div>
+          <div class="srow"><span class="lbl"><b>Messages par discussion</b><small>au plus, de 2 à 200</small></span><div class="step"><button type="button" data-t="ts-messages" data-s="-1" aria-label="Moins">−</button><input id="ts-messages" type="number" inputmode="numeric" min="2" max="200" aria-label="Messages par discussion"><button type="button" data-t="ts-messages" data-s="1" aria-label="Plus">+</button></div></div>
+        </div>
+        <p class="msg small left">Une discussion s’arrête au premier plafond atteint. Les nouvelles valeurs valent dès la prochaine discussion.</p>
+        <p id="ts-msg" class="msg small left"></p>
+        <button id="ts-save" class="pill wide" type="button">Enregistrer les équipes</button>
+      </div>
+      <h2 class="sect">Mes messages</h2>
+      <div class="card">
+        <div class="me-prev"><div class="bubble">Voilà à quoi ressemblent mes messages.</div></div>
+        <div id="me-colors" class="colors me-colors" role="radiogroup" aria-label="Couleur de mes messages"></div>
+      </div>
+      <h2 class="sect">Épinglés et personnages</h2>
+      <div class="card"><div class="srow"><span class="lbl"><b>Synchronisés</b><small id="pin-state"></small></span><i id="pin-dot" class="dot"></i></div></div>
+    </div>
+  </section>
+
+  <section id="chat" class="view" hidden>
+    <div id="halo" class="halo" aria-hidden="true"></div>
+    <header class="bar chat-bar">
+      <button id="back" class="icon-btn" type="button" aria-label="Retour"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+      <span id="chat-av" class="chat-av"></span>
+      <div id="chat-who" class="who">
+        <div id="chat-name" class="name"></div>
+        <div id="chat-sub" class="sub"></div>
+      </div>
+      <button id="find-btn" class="icon-btn find" type="button" aria-label="Rechercher dans le fil"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+      <button id="group-tasks" class="icon-btn find gt" type="button" aria-label="Tâches du groupe" hidden><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 1.5 1.5L8 5M4 12l1.5 1.5L8 11M4 18l1.5 1.5L8 17M11 6h9M11 12h9M11 18h9"/></svg><em id="gt-n" class="gt-n" hidden></em></button>
+      <button id="group-settings" class="icon-btn more" type="button" aria-label="Réglages du groupe" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg></button>
+      <button id="bot-edit" class="icon-btn more" type="button" aria-label="Réglages du bot" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg></button>
+    </header>
+    <div id="find-bar" class="find-bar" hidden>
+      <button id="find-x" type="button" aria-label="Fermer la recherche"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      <label><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="find-q" type="search" placeholder="Rechercher dans le fil" autocomplete="off" enterkeyhint="search"><span id="find-n" class="n" aria-live="polite"></span></label>
+      <button id="find-prev" type="button" aria-label="Résultat précédent"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button>
+      <button id="find-next" type="button" aria-label="Résultat suivant"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    </div>
+    <main id="log" class="log"></main>
+    <div class="jump-anchor"><div class="jump">
+      <button id="prev-prompt" type="button" aria-label="Mon message précédent" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6"/></svg></button>
+      <button id="to-bottom" type="button" aria-label="Aller en bas" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    </div></div>
+    <div id="busy-bar" class="busy-bar" hidden>
+      <span>Entrée met en file, ou guide-le tout de suite</span>
+      <button id="steer" class="pill g s" type="button">Guider</button>
+    </div>
+    <div id="trace-sheet" class="trace-sheet" role="dialog" aria-label="Fil de travail" hidden>
+      <div id="tr-head" class="tr-head"><span class="tr-grip"></span><div class="tr-top"><span id="tr-who" class="tr-who"></span><button id="tr-close" class="tr-x" type="button" aria-label="Fermer">&times;</button></div></div>
+      <div id="tr-tabs" class="tr-tabs" hidden></div>
+      <div id="tr-body" class="tr-body"></div>
+      <div class="tr-foot"><button id="tr-stop" class="pill g s" type="button" hidden>Arrêter ce bot</button></div>
+    </div>
+    <div id="grp-bar" class="grp-bar" hidden><span id="grp-av"></span><span id="grp-txt" class="grp-txt"></span><button id="grp-stop" class="pill g s" type="button">Arrêter</button></div>
+    <form id="composer" class="composer">
+      <div id="mention" class="mention" role="listbox" hidden></div>
+      <div id="reply" class="reply" hidden></div>
+      <div id="tray" class="tray" hidden></div>
+      <button id="attach" class="attach" type="button" aria-label="Joindre une image ou un fichier"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      <input id="file" type="file" multiple hidden>
+      <textarea id="input" rows="1" placeholder="Message" enterkeyhint="send"></textarea>
+      <button id="mic" class="mic" type="button" aria-label="Dicter" hidden><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+      <button id="send" class="send" type="submit" aria-label="Envoyer"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+    </form>
+  </section>
+
+  <div id="msg-menu" class="msg-menu" hidden>
+    <div class="mm-back"></div>
+    <div class="mm-sheet" role="menu">
+      <div class="grab"></div>
+      <div id="mm-who" class="mm-who"></div>
+      <p id="mm-prev" class="mm-prev"></p>
+      <div class="mm-grid">
+        <button type="button" data-a="copy" role="menuitem"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="3"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></span><span class="l">Copier</span></button>
+        <button type="button" data-a="share" role="menuitem"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7 8l5-4 5 4"/><path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg></span><span class="l">Partager</span></button>
+        <button type="button" data-a="speak" role="menuitem"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10H4z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/></svg></span><span class="l">Lire</span></button>
+        <button type="button" data-a="reply" role="menuitem" hidden><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 8 5 12l5 4"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/></svg></span><span class="l">Répondre</span></button>
+        <button type="button" data-a="quote" role="menuitem"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h4v4c0 3-1.5 5-4 6M14 7h4v4c0 3-1.5 5-4 6"/></svg></span><span class="l">Citer</span></button>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="new-group-dlg" class="sheet tall">
+    <div class="grab"></div>
+    <div class="sh-head"><h3>Nouveau groupe</h3><button id="ng-cancel" type="button" class="txt-btn">Annuler</button></div>
+    <input id="ng-name" class="pillfield" type="text" placeholder="Nom du groupe" aria-label="Nom du groupe" autocomplete="off" maxlength="80">
+    <div class="cap row-cap"><span>Membres</span><span id="ng-count"></span></div>
+    <div id="ng-bots" class="tiles"></div>
+    <div class="cap row-cap" id="ng-lead-cap" hidden><span>Meneur</span><span>distribue la parole</span></div>
+    <div id="ng-lead" class="lchips" role="radiogroup" aria-label="Meneur" hidden></div>
+    <p id="ng-msg" class="msg small"></p>
+    <button id="ng-create" type="button" class="pill wide">Créer le groupe</button>
+  </dialog>
+
+  <dialog id="share-dlg" class="sheet">
+    <div class="grab"></div>
+    <h3>Partager vers…</h3>
+    <pre id="sh-text" class="share-text"></pre>
+    <div id="sh-list" class="share-list"></div>
+    <p class="hint">Le texte arrive dans le composeur, tu relis avant d’envoyer</p>
+    <div class="btns"><button id="sh-cancel" type="button" class="pill g">Annuler</button></div>
+  </dialog>
+
+  <dialog id="group-dlg" class="page">
+    <header class="bar">
+      <button id="gs-cancel" class="icon-btn" type="button" aria-label="Retour"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+      <h1>Réglages du groupe</h1>
+    </header>
+    <div class="page-body">
+      <label class="fld">Nom<input id="gs-name" type="text" maxlength="80" autocomplete="off"></label>
+      <label class="fld">But du groupe<textarea id="gs-purpose" rows="2" maxlength="500" placeholder="Ce que ce groupe doit faire"></textarea></label>
+      <label class="fld">Notes partagées<textarea id="gs-notes" rows="3" placeholder="Ce que chaque bot doit savoir"></textarea></label>
+      <label class="fld" hidden>Qui répond<select id="gs-routing"><option value="lead">Un meneur</option></select></label>
+      <label class="fld" id="gs-lead-row">Meneur (distribue la parole)<select id="gs-lead"></select></label>
+      <div class="fld" id="gs-members-row">Membres<div id="gs-members" class="picks"></div>
+        <span class="small">Changer les membres recrée le groupe : but, notes et routage sont recopiés, avec un résumé des derniers échanges.</span></div>
+      <p id="gs-msg" class="msg small left"></p>
+    </div>
+    <div class="page-foot">
+      <button id="gs-save" type="button" class="pill wide">Enregistrer</button>
+      <button id="gs-disband" type="button" class="danger-link" hidden>Supprimer le groupe</button>
+    </div>
+  </dialog>
+
+  <dialog id="tasks-dlg" class="page">
+    <header class="bar">
+      <button id="tk-close" class="icon-btn" type="button" aria-label="Retour"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+      <div class="who"><div class="name">Tâches du groupe</div><div id="tk-sub" class="sub"></div></div>
+    </header>
+    <div class="page-body"><div id="tk-filter" class="kb-filter" hidden></div><div id="tk-list" class="tk-list"></div><p id="tk-msg" class="msg small left"></p></div>
+    <div class="page-foot tk-foot">
+      <div class="tk-addrow"><input id="tk-new" type="text" maxlength="300" placeholder="Ajouter une tâche" autocomplete="off" enterkeyhint="done"><button id="tk-add" class="pill s" type="button">Ajouter</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="bot-dlg" class="page">
+    <div class="page-body">
+      <div id="bd-hero" class="hero">
+        <button id="bd-cancel" class="icon-btn" type="button" aria-label="Retour"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+        <span id="bd-big" class="hero-av"></span>
+      </div>
+      <div class="hero-t"><h1 id="bd-title"></h1><div class="sub">profil technique <span id="bd-profile"></span></div><div id="bd-pills" class="pills"></div></div>
+      <label class="fld">Nom affiché<input id="bd-name" type="text" maxlength="60" autocomplete="off"></label>
+      <h2 class="sect">Personnaliser</h2>
+      <div class="card pad">
+        <div id="bd-colors" class="colors" role="radiogroup" aria-label="Couleur"></div>
+        <div id="bd-kinds" class="kinds" role="radiogroup" aria-label="Personnage"></div>
+      </div>
+      <h2 class="sect">Tâches planifiées</h2>
+      <div id="bd-cron" class="cron-list"></div>
+      <p id="bd-msg" class="msg small left"></p>
+    </div>
+    <div class="page-foot"><button id="bd-save" type="button" class="pill wide">Enregistrer</button></div>
+  </dialog>
+
+  <script src="version.js"></script>
+  <script src="report.js"></script>
+  <script src="vendor/marked.umd.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Ruff du dépôt (hook pre-commit et CI) : seulement ce qui casse au chargement ou à l'exécution du plugin.
+# F : noms indéfinis, imports inutiles ; E9 : erreurs de syntaxe ; PLE : erreurs détectables à la lecture.
+# PLE2515 ignoré : l'espace de largeur nulle de mention.py neutralise les @ volontairement.
+target-version = "py311"
+[lint]
+select = ["F", "E9", "PLE"]
+ignore = ["PLE2515"]

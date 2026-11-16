@@ -1,0 +1,15 @@
+[
+  {"type":"recap","title":"Flotte Dofus — prête à recruter ?","kicker":"audit bot-rh, vérifié par la commande",
+   "facts":[
+     {"value":"2 / 2","label":"profils existants (dofus, rea), deepseek-v4.1-flash + low"},
+     {"value":"cadre écrit","label":"limites non négociables présentes dans le SOUL du meneur"},
+     {"value":"107","label":"skills héritées du clone sur le profil dofus — socle non minimal"},
+     {"value":"0","label":"recrutement lancé : j'attends la spec du meneur"}
+   ]},
+  {"type":"steps","items":[
+    {"label":"Audit flotte bot-rh (profils, modèle, SOUL, socle de skills)","state":"done"},
+    {"label":"dofus : état des lieux daté + spec d'équipe + plan de renseignement","state":"now"},
+    {"label":"rea : verdict Mono/IL2CPP et trous d'outillage","state":"now"},
+    {"label":"bot-rh : recruter sur la spec, tailler le socle de skills, onboarding référentiels","state":"todo"}
+  ]}
+]

@@ -19,7 +19,8 @@ from . import ROOT, STATE, _hub, _log, _rpc
 
 PERIOD_S = int(os.environ.get("BOT_GROUPS_SWEEP_S") or 60)  # 60 s en prod ; le gateway de test le baisse (parcours restart sous 30 s)
 MAX_TRIES = 3
-_tries: dict[str, int] = {}
+from . import lifecycle
+_tries: dict[str, int] = lifecycle.shared("resume.tries", dict)  # gardé au rechargement à chaud
 
 
 def _in_gateway() -> bool:
@@ -36,21 +37,65 @@ def sweep() -> int:
         for a in ((st.get("driver_status") or {}).get("pending_actions") or []):
             if a.get("kind") != "retry":
                 continue
+            if str(a.get("task_id") or "").startswith(STALL_PREFIX):
+                _flush_stalled(room["room_id"])  # à chaque passe, même après le dernier essai de relance
             key = f"{room['room_id']}|{a.get('task_id')}|{a.get('execution_generation')}"
             n = _tries.get(key, 0)
             if n >= MAX_TRIES:
                 continue
             _tries[key] = n + 1
             params = {k: a.get(k) for k in ("member_id", "task_id", "execution_generation")}
+            stalled = str(a.get("task_id") or "").startswith(STALL_PREFIX)
             try:
                 _rpc(("groups.retry", {"room_id": room["room_id"], **params}))
                 done += 1
                 _log("auto_retry", True, room=room.get("name"), member=a.get("member_id"), attempt=n + 1)
             except Exception as exc:
-                _log("auto_retry", False, room=room.get("name"), member=a.get("member_id"), attempt=n + 1, cause=str(exc)[:300])
-                if n + 1 >= MAX_TRIES:
-                    _hub("Tour de groupe non relancé", f"{room.get('name')} · {a.get('member_id')} : {str(exc)[:200]}", "4")
+                # groupe bloqué (« Members could not be woken ») : la vraie cause est dans le groupe, pas dans
+                # l'erreur de la RPC (« invalid_params »). Alerte dès le premier échec, une fois par blocage.
+                cause = (_stall_cause(room["room_id"]) if stalled else None) or str(exc)
+                _log("auto_retry", False, room=room.get("name"), member=a.get("member_id"), attempt=n + 1,
+                     cause=cause[:300], stalled=stalled)
+                if stalled and n == 0:
+                    _hub("Groupe bloqué", f"{room.get('name')} : le moteur ne réveille plus les bots ({cause[:200]})."
+                         " Les résultats gardés sont posés quand même.", "4")
+                elif n + 1 >= MAX_TRIES:
+                    _hub("Tour de groupe non relancé", f"{room.get('name')} · {a.get('member_id')} : {cause[:200]}", "4")
     return done
+
+
+# hosted_room_prepare_stall.RETRY_TASK_PREFIX : la ligne Réessayer d'un groupe dont le moteur ne prépare plus les tours
+STALL_PREFIX = "prepare:"
+
+
+def _stall_cause(room_id: str) -> str | None:
+    """Le dernier « member.unavailable » du groupe (prepare_failed) : la cause lisible du blocage."""
+    try:
+        db = sqlite3.connect(f"file:{ROOT / 'state.db'}?mode=ro", uri=True, timeout=10)
+        try:
+            row = db.execute("select payload_json from hosted_room_events where room_id = ? and kind = "
+                             "'member.unavailable' order by seq desc limit 1", (room_id,)).fetchone()
+        finally:
+            db.close()
+        return (str(json.loads(row[0]).get("error") or "") or None) if row else None
+    except Exception:
+        return None
+
+
+def _flush_stalled(room_id: str) -> None:
+    """Groupe bloqué : le moteur ne passe plus entre deux tours, donc l'inbox ne se vide plus (7 résultats gardés
+    6 h la nuit du 2026-11-17). On pose ici, tout de suite, ce qui attend, sous le verrou du moteur."""
+    from . import inbox
+    if not inbox.held(room_id):
+        return
+    try:
+        from .trace import _service
+        svc = _service()
+    except Exception as exc:
+        _log("inbox_flush", False, room_id=room_id, stalled=True, cause=str(exc)[:200])
+        return
+    with svc._policy_lock:
+        inbox.flush(svc, room_id, force=True)
 
 
 # Un tour du moteur refusé pendant un redémarrage finit « failed » (runtime_draining), état terminal sans bouton
@@ -111,18 +156,23 @@ def relaunch_drained() -> int:
     return n
 
 
-def _loop() -> None:
-    try:
-        from . import dispatch
-        dispatch.recover_jobs()  # tâches parallèles lancées avant le redémarrage : la barre les montre tout de suite
-    except Exception as exc:
-        _log("dispatch_recovered", False, cause=str(exc)[:300])
-    time.sleep(int(os.environ.get("BOT_GROUPS_RESUME_DELAY_S") or 45))  # laisser le gateway finir de démarrer (le gateway de test le baisse)
-    try:
-        from . import dispatch
-        dispatch.recover_side()  # messages en voie rapide coupés par le redémarrage
-    except Exception as exc:
-        _log("side_recovered", False, cause=str(exc)[:300])
+def _loop(gen: int) -> None:
+    """Boucle de fond du chargement ``gen`` : s'arrête dès qu'un chargement plus récent existe (rechargement à chaud)."""
+    pend = lifecycle.shared("resume.boot_pending", lambda: [False])  # reprise des voies rapides encore à faire
+    ready = lifecycle.shared("resume.ready_at", lambda: [0.0])
+    if lifecycle.once("resume.boot"):  # une fois par processus : au démarrage du gateway, pas à chaque rechargement
+        pend[0] = True
+        try:
+            from . import dispatch
+            dispatch.recover_jobs()  # tâches parallèles lancées avant le redémarrage : la barre les montre tout de suite
+        except Exception as exc:
+            _log("dispatch_recovered", False, cause=str(exc)[:300])
+        ready[0] = time.time() + int(os.environ.get("BOT_GROUPS_RESUME_DELAY_S") or 45)  # laisser le gateway finir de démarrer
+    # chargements en rafale (une copie par profil) : seul le dernier tourne ; jamais avant la fin du démarrage
+    if not lifecycle.wait(gen, max(2.0, ready[0] - time.time())):
+        return  # un chargement plus récent prend la suite, reprise comprise (pend reste vrai)
+    if pend[0]:
+        _recover_side()
     while True:
         try:
             from . import dispatch
@@ -137,17 +187,31 @@ def _loop() -> None:
             relaunch_drained()
         except Exception as exc:
             _log("relaunch_drained", False, cause=str(exc)[:300])
-        time.sleep(PERIOD_S)
+        if not lifecycle.wait(gen, PERIOD_S):
+            _log("resume_loop_handover", True, gen=gen, next=lifecycle.current())
+            return
 
 
-def start() -> None:
+def _recover_side() -> None:
+    lifecycle.shared("resume.boot_pending", lambda: [False])[0] = False
+    try:
+        from . import dispatch
+        dispatch.recover_side()  # messages en voie rapide coupés par le redémarrage
+    except Exception as exc:
+        _log("side_recovered", False, cause=str(exc)[:300])
+
+
+def start(gen: int) -> None:
     if not _in_gateway():
         return
     STATE.mkdir(parents=True, exist_ok=True)
-    lock = open(STATE / "resume.lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return  # une autre boucle tourne déjà
-    threading.Thread(target=_loop, name="bot-groups-resume", daemon=True, args=()).start()
-    start.lock = lock  # garde le verrou ouvert
+    held = lifecycle.shared("resume.lock", lambda: [None])
+    if held[0] is None:  # un seul gateway par dossier d'état : verrou pris une fois par processus, gardé au rechargement
+        lock = open(STATE / "resume.lock", "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            lock.close()
+            return  # un autre processus tient la boucle
+        held[0] = lock
+    threading.Thread(target=_loop, name="bot-groups-resume", daemon=True, args=(gen,)).start()

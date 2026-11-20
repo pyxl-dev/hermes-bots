@@ -1,5 +1,5 @@
 name: bot-groups
-version: 1.22.1
+version: 1.31.0
 description: "Laisse les bots créer des groupes entre eux, les lister, les lire et y poster, via le socket local du gateway (identité du propriétaire, comme le desktop). Garde-fous : 3 groupes actifs créés par les bots, taille fixée par Yoan (hosted_rooms.discussion.max_members), routage meneur, alerte Hub. Mentions @yoan : consigne aux agents (seul le meneur dans un groupe) et notif Hub prioritaire."
 author: yaia
 provides_tools:
@@ -8,8 +8,10 @@ provides_tools:
   - group_create
   - group_post
   - group_dispatch
+  - group_steer
   - group_tasks
 provides_hooks:
   - pre_llm_call
   - post_llm_call
   - transform_llm_output
+  - pre_tool_call

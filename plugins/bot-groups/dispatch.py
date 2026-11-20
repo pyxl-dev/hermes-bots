@@ -8,7 +8,7 @@ la forme ``[bot] résultat`` suivie de ``@meneur`` : la mention réveille le men
 La PWA affiche ces messages comme ceux du bot.
 
 Garde-fous : seul le meneur répartit, seulement vers des membres du groupe, une tâche en cours par bot et
-par groupe, 6 tâches en même temps en tout, 30 minutes au plus par tâche.
+par groupe, 6 tâches en même temps en tout ; à 30 minutes le bot est prié de conclure, coupé à 45.
 Journal : ~/.hermes/data/bot-groups/actions.jsonl (``dispatch``, ``dispatch_done``, ``dispatch_failed``),
 ``python3 status.py``, alerte Hub sur chaque échec. Une tâche survit à un redémarrage du gateway (processus
 détaché, fiche dans data/bot-groups/jobs, reprise par ``recover_jobs``).
@@ -26,11 +26,13 @@ import time
 import uuid
 from pathlib import Path
 
-from . import STATE, _caller, _hub, _log, _rpc, _text, inbox
+from . import STATE, _caller, _hub, _log, _rpc, _text, inbox, lead_guard, routing
+from .mention import LEAD_RULES, MEMBER_RULES
 
 HERMES = Path.home() / ".local" / "bin" / "hermes"
 MAX_RUNNING = 6
-TIMEOUT_S = 30 * 60
+TIMEOUT_S = 30 * 60        # le bot est prié de conclure
+HARD_TIMEOUT_S = 45 * 60   # puis coupé
 KEEP_DONE_S = 15 * 60
 CONTEXT_MESSAGES = 12
 
@@ -90,7 +92,7 @@ def _recent(room_id: str, members: list[dict]) -> str:
 
 def _neutralize(text: str, handles: set[str]) -> str:
     """Les @handle des membres dans un résultat ne doivent réveiller personne : seul le meneur est cité."""
-    return re.sub(r"@([A-Za-z0-9][\w.:-]*)", lambda m: "@​" + m.group(1) if m.group(1).casefold() in handles else m.group(0), text)
+    return routing.neutralize(text, handles)
 
 
 def _post(room_id: str, bot: str, body: str, lead_handle: str | None, event_id: str | None = None) -> None:
@@ -122,15 +124,81 @@ RETRY_WAIT_S = int(os.environ.get("BOT_GROUPS_RETRY_WAIT_S") or 30)  # 30 s en p
 
 
 _INTERRUPTED = re.compile(r"Gateway restarting: this turn was interrupted|turn was interrupted and will not be run", re.I)
+# Le client `hermes chat` a perdu sa connexion au gateway (battement de 45 s manqué, Mac saturé le 2026-11-17 à
+# 00:35, 00:50 et 00:56) : le tour a pu finir, ou continuer côté gateway. On ne renvoie pas la demande telle quelle
+# (Hermes l'interdit) : on relance dans la même session avec une consigne de reprise. Si l'ancien tour tourne
+# encore, la relance reçoit « session_busy » et repart plus tard.
+_LOST = re.compile(r"Gateway disconnected; turn outcome is unknown|session_replay_gap", re.I)
+_RESUME_MARK = "[reprise après coupure]"
+_RESUME = (_RESUME_MARK + " Ta connexion au gateway a été coupée pendant la tâche ci-dessous ; son issue est inconnue. "
+           "Relis cette session : si la tâche est déjà faite, redonne seulement ta réponse finale ; sinon termine-la "
+           "sans refaire ce qui est déjà fait.\n\n")
 
 
 def _transient_cause(cause: str) -> bool:
-    if _INTERRUPTED.search(cause):
+    if _INTERRUPTED.search(cause) or _LOST.search(cause):
+        return True
+    # rien n'a été envoyé, ou la session est encore prise par le tour coupé (« session_busy ») : la même demande
+    # peut repartir telle quelle
+    if re.search(r"before the request was sent|session_busy", cause, re.I):
         return True
     # « Gateway draining: not_ready » : un appel du tour tombé pendant le drain (GatewayUnavailableError de
     # hermes_cli/gateway_client.py) ; posé comme un échec du bot au lieu d'être relancé (group-journey, 2026-11-16)
-    return bool(re.search(r"runtime_draining|Gateway (draining|starting|stopping|restarting)\b|gateway_(draining|starting)|couldn't start the model connection|Errno 61|Connection refused|"
+    # « Gateway connection failed/timed out; no local fallback » : session.create au-delà des 30 s du client sur un
+    # gateway chargé, avant tout tour ; 3 bots posés en échec le 2026-11-17 à 00:35. « Gateway disconnected; turn
+    # outcome is unknown » est relancé plus haut (_LOST) avec la consigne de reprise : le tour a pu tourner.
+    return bool(re.search(r"Gateway connection (failed|timed out)|runtime_draining|Gateway (draining|starting|stopping|restarting)\b|gateway_(draining|starting)|couldn't start the model connection|Errno 61|Connection refused|"
                           r"ConnectionClosed|HTTP 50[23]|gateway.{0,40}(unavailable|unreachable|indisponible)", cause, re.I))
+
+
+# Cause brute de hermes -> phrase pour le groupe (Yoan et le meneur la lisent). La cause brute reste dans le journal et
+# l'alerte Hub. Vu dans le groupe alpha (2026-11-16 à 18) : « HTTP 403: Model access is disabled. Change model access at
+# https://opencode.ai/... » x15, « Your message was not sent. To continue, run `hermes sessions discard local-... ` »,
+# « Session: local-... session_id: local-... ».
+_READABLE = (
+    (re.compile(r"HTTP 40[23]\b.*(model access|quota|credit|billing|insufficient)|\b402\b|quota|insufficient.{0,20}(credit|balance)|rate.?limit|HTTP 429", re.I),
+     "le fournisseur de mon modèle refuse les appels (quota épuisé ou accès coupé). Ne me relance pas tant que "
+     "Yoan n'a pas rétabli l'accès : la même tâche échouerait pareil"),
+    (re.compile(r"Your message was not sent|sessions discard", re.I),
+     "ma session était encore prise par un tour précédent à l'issue inconnue ; la tâche n'a pas démarré"),
+    (re.compile(r"^Session: \S+ session_id: \S+$"), "ma session s'est arrêtée sans réponse"),
+    (re.compile(r"turn outcome is unknown|Gateway disconnected", re.I), "la connexion au gateway a été coupée pendant la tâche"),
+    (re.compile(r"Gateway connection (failed|timed out)|runtime_draining|draining", re.I), "le gateway redémarrait ou ne répondait pas"),
+)
+
+
+def readable(cause: str) -> str:
+    """La cause d'un échec, dite pour le groupe : jamais de chemin, d'identifiant de session ni de commande."""
+    c = " ".join(str(cause or "").split())
+    for rx, text in _READABLE:
+        if rx.search(c):
+            return text
+    c = re.sub(r"https?://\S+|local-[0-9a-f]{12,}|/(Users|private|tmp)/\S+", "…", c)
+    return (c[:200].rstrip() + ("…" if len(c) > 200 else "")) or "réponse vide"
+
+
+# Refus du fournisseur du modèle (quota, accès coupé) : le meneur relançait aussitôt les mêmes bots, qui échouaient
+# pareil (11 échecs d'affilée le 2026-11-18, issue 91 point 4). Un bot refusé ainsi n'est plus relancé pendant
+# PROVIDER_PAUSE_S : group_dispatch le dit au meneur au lieu de lancer une tâche vouée à l'échec.
+PROVIDER_PAUSE_S = 15 * 60
+_provider_down: dict[str, float] = _SHARED.__dict__.setdefault("provider_down", {})
+
+
+def _provider_refused(cause: str) -> bool:
+    return bool(_READABLE[0][0].search(" ".join(str(cause or "").split())))
+
+
+_HUB_GAP_S = 1800
+_hub_seen: dict[str, float] = {}
+
+
+def _hub_once(title: str, key: str, body: str) -> None:
+    """Une alerte Hub par cause et par demi-heure : 15 échecs de quota d'affilée ne font plus 15 alertes."""
+    now = time.time()
+    if now - _hub_seen.get(key, 0) < _HUB_GAP_S:
+        return
+    _hub_seen[key] = now
+    _hub(title, body, "4")
 
 
 def _transient(exc: Exception) -> bool:
@@ -242,9 +310,24 @@ def _watch(jid: str) -> None:
     """Attend la fin du processus de la tâche (enfant ou hérité d'un gateway précédent), puis la termine."""
     meta = json.loads(_meta_path(jid).read_text())
     pid, started = int(meta["pid"]), float(meta.get("started_try") or meta["started"])
-    timed_out = False
+    timed_out, warned = False, False
     while _alive(pid):
-        if time.time() - started > TIMEOUT_S:
+        if not warned and time.time() - started > TIMEOUT_S:
+            # 30 min : le bot est prié de rendre ce qu'il a (recadrage dans son tour), au lieu d'être tué en plein
+            # travail (alpha-inject coupé à 30 min le 2026-11-16, issue 91 point 9). Coupé seulement à HARD_TIMEOUT_S.
+            warned = True
+            try:
+                from .steer import redirect_turn
+                room, _ctx, _lead = _room_and_lead(meta["room_id"])
+                ok = redirect_turn(room, meta["bot"], (
+                    f"Délai : ta tâche tourne depuis {TIMEOUT_S // 60} min. Termine l'étape en cours et rends maintenant "
+                    "ton résultat final : ce qui est fait, avec sa preuve, et ce qui reste. Tu seras coupé dans "
+                    f"{(HARD_TIMEOUT_S - TIMEOUT_S) // 60} min."))
+            except Exception as exc:
+                ok = False
+                _log("dispatch_deadline", False, room_id=meta.get("room_id"), bot=meta.get("bot"), cause=str(exc)[:200])
+            _log("dispatch_deadline", True, room_id=meta.get("room_id"), bot=meta.get("bot"), steered=ok)
+        if time.time() - started > (HARD_TIMEOUT_S if warned else TIMEOUT_S):
             with contextlib.suppress(OSError):
                 os.killpg(pid, signal.SIGTERM)
             timed_out = True
@@ -318,7 +401,7 @@ def _finish(jid: str, meta: dict, timed_out: bool) -> None:
         res = _final_result((JOBS_DIR / f"{jid}.out").read_text(errors="replace"))
         out = (res.get("text") or "").strip()
         if timed_out:
-            cause = f"délai de {TIMEOUT_S // 60} min dépassé"
+            cause = f"délai de {HARD_TIMEOUT_S // 60} min dépassé"
         elif _INTERRUPTED.search(out):
             # tour coupé par un redémarrage : hermes renvoie ce texte comme une réponse normale (alpha-session, 01:59)
             cause = out[:300]
@@ -339,16 +422,21 @@ def _finish(jid: str, meta: dict, timed_out: bool) -> None:
         if _stop_requested(jid):
             return _finish_stopped(jid, meta, job)
         try:
-            _spawn(jid, (JOBS_DIR / f"{jid}.query").read_text(), meta["session"], {**meta, "tries": tries + 1})
+            query = (JOBS_DIR / f"{jid}.query").read_text()
+            if _LOST.search(cause + " " + diag) and not query.startswith(_RESUME_MARK):
+                query = _RESUME + query
+            _spawn(jid, query, meta["session"], {**meta, "tries": tries + 1})
             threading.Thread(target=_watch, args=(jid,), name=f"dispatch-{bot}", daemon=True).start()
             return
         except Exception as exc:
             cause = f"relance impossible : {exc}"[:300]
     try:
         if status == "done":
+            if _ASSIGN_ONLY.match(out):
+                out = _assign_from_side(meta, out)
             post(_neutralize(out, handles))
         else:
-            post(f"Je n'ai pas pu finir la tâche confiée : {cause}.")
+            post(f"Je n'ai pas pu finir la tâche confiée : {readable(cause)}.")
     except Exception as exc:
         status, cause = "failed", f"résultat non posté : {exc}"[:300]
     from . import trace
@@ -356,6 +444,36 @@ def _finish(jid: str, meta: dict, timed_out: bool) -> None:
     for ext in ("json", "query", "out", "err"):
         (JOBS_DIR / f"{jid}.{ext}").unlink(missing_ok=True)
     _end(jid, job, room_id, bot, status, cause, out, meta)
+
+
+# Réponse de routage du moteur ({"assign": [...]}) rendue par le meneur dans une réponse immédiate : sa session
+# « Groupe · <nom> » garde l'habitude du tour de répartition. Postée telle quelle le 2026-11-16 (01:29 et 17:45).
+_ASSIGN_ONLY = re.compile(r'^\s*(```(json)?\s*)?\{\s*"assign"\s*:\s*\[[^\]]*\]\s*\}\s*(```)?\s*$')
+
+
+def _assign_from_side(meta: dict, out: str) -> str:
+    """Le meneur a répondu par {"assign": [...]} : la demande part vraiment vers ces bots (group_dispatch), et le
+    groupe lit une phrase. Ailleurs (pas le meneur, ou pas une réponse immédiate) : une phrase, jamais le JSON."""
+    try:
+        names = [str(h).lstrip("@") for h in json.loads(out[out.index("{"):out.rindex("}") + 1]).get("assign") or []
+                 if isinstance(h, str)]
+    except ValueError:
+        names = []
+    question = str(meta.get("question") or "").strip()
+    is_lead = meta.get("handle") and meta.get("handle") == meta.get("lead_handle")
+    names = [n for n in names if n.casefold() != str(meta.get("handle") or "").casefold()]
+    if meta.get("kind") != "side" or not is_lead or not names or not question:
+        _log("assign_leak", True, room_id=meta.get("room_id"), bot=meta.get("bot"), kind=meta.get("kind"))
+        return "Je n'ai pas de réponse à donner ici."
+    res = json.loads(group_dispatch({"room_id": meta["room_id"], "assignments": [
+        {"bot": n, "task": f"Message de Yoan au groupe (le meneur te l'a confié) :\n{question}"} for n in names]},
+        _as=meta["bot"]))
+    _log("assign_side", bool(res.get("ok")), room_id=meta["room_id"], bots=res.get("started"), cause=res.get("error"))
+    if not res.get("ok"):
+        return f"Je n'ai pas pu confier ta demande : {res.get('error')}."
+    who = ", ".join(res.get("started") or []) + (
+        f" (recadré : {', '.join(res['steered'])})" if res.get("steered") else "")
+    return f"Je confie ta demande à {who}. Les résultats arrivent dans le groupe."
 
 
 def recover_jobs() -> int:
@@ -398,7 +516,7 @@ def _run(job_id: str, prompt: str, session: str, meta: dict) -> None:
     except Exception as exc:
         cause = f"lancement impossible : {exc}"[:300]
         try:
-            _poster(meta)(f"Je n'ai pas pu finir la tâche confiée : {cause}.")
+            _poster(meta)(f"Je n'ai pas pu finir la tâche confiée : {readable(cause)}.")
         except Exception as exc2:
             cause = f"résultat non posté : {exc2}"[:300]
         _end(job_id, _jobs[job_id], meta["room_id"], meta["bot"], "failed", cause, "", meta)
@@ -428,6 +546,7 @@ def relaunch(room_id: str, member: dict, prompt: str, lead_handle: str | None, h
 def _end(jid: str, job: dict, room_id: str, bot: str, status: str, cause: str, out: str, meta: dict) -> None:
     with _jobs_lock:
         job.update(status=status, ended=time.time(), cause=cause or None)
+    inbox._wake()  # une demande suivante attendait peut-être la fin de cette table ronde
     dur = round(time.time() - float(job.get("started") or meta["started"]))
     if status == "done":
         _log("dispatch_done", True, room_id=room_id, bot=bot, seconds=dur, chars=len(out))
@@ -435,13 +554,17 @@ def _end(jid: str, job: dict, room_id: str, bot: str, status: str, cause: str, o
         _log("dispatch_stopped", True, room_id=room_id, bot=bot, seconds=dur)
     else:
         _log("dispatch_failed", False, room_id=room_id, bot=bot, seconds=dur, cause=cause)
-        _hub("Table ronde : tâche en échec", f"{bot} dans {job.get('room') or meta.get('room')} : {cause}", "4")
+        if _provider_refused(cause):
+            _provider_down[bot] = time.time()
+        _hub_once("Table ronde : tâche en échec", readable(cause),
+                  f"{bot} dans {job.get('room') or meta.get('room')} : {cause}")
 
 
-def group_dispatch(args: dict, _peer_ok: bool = False, **kw) -> str:
-    """_peer_ok : appel interne de fanout pour un bot non meneur qui cite des coéquipiers (1.17.0)."""
+def group_dispatch(args: dict, _peer_ok: bool = False, _as: str | None = None, **kw) -> str:
+    """_peer_ok : appel interne de fanout pour un bot non meneur qui cite des coéquipiers (1.17.0).
+    _as : appel interne au nom d'un bot (réponse immédiate du meneur rendue en {"assign": ...})."""
     import json
-    me, room_id = _caller(), str(args.get("room_id") or "")
+    me, room_id = _as or _caller(), str(args.get("room_id") or "")
     raw = args.get("assignments") or []
 
     def err(msg: str) -> str:
@@ -475,9 +598,14 @@ def group_dispatch(args: dict, _peer_ok: bool = False, **kw) -> str:
         if m is None:
             return err(f"« {a.get('bot')} » n'est pas membre du groupe ; membres : {', '.join(x.get('handle') or '' for x in members)}")
         if m.get("member_id") == me_member.get("member_id"):
-            return err("ne te confie pas de tâche à toi-même : fais ta part directement dans ton tour")
+            return err("ne te confie pas de tâche à toi-même : tu coordonnes, confie chaque part à un membre")
         if not task:
             return err(f"tâche vide pour {m.get('handle')}")
+        down = _provider_down.get(str(m.get("profile") or m.get("member_id")), 0)
+        if time.time() - down < PROVIDER_PAUSE_S:
+            return err(f"{m.get('handle')} : le fournisseur de son modèle a refusé ses appels il y a "
+                       f"{int((time.time() - down) // 60)} min (quota épuisé ou accès coupé). Ne le relance pas avant "
+                       f"{PROVIDER_PAUSE_S // 60} min ni avant que Yoan ait rétabli l'accès ; dis-le à Yoan.")
         if m.get("member_id") in seen:
             return err(f"une seule tâche par bot ({m.get('handle')} apparaît deux fois)")
         seen.add(m.get("member_id"))
@@ -487,9 +615,29 @@ def group_dispatch(args: dict, _peer_ok: bool = False, **kw) -> str:
         for jid in [j for j, v in _jobs.items() if v["status"] != "running" and now - v.get("ended", now) > KEEP_DONE_S]:
             _jobs.pop(jid, None)
         running = [v for v in _jobs.values() if v["status"] == "running"]
-        busy = [m.get("handle") for m, _ in picked if any(v["room_id"] == room_id and v["bot"] == (m.get("profile") or m.get("member_id")) for v in running)]
-        if busy:
-            return err(f"déjà en train de travailler pour ce groupe : {', '.join(busy)} ; attends son résultat")
+        busy = [(m, t) for m, t in picked if any(v["room_id"] == room_id and v["bot"] == (m.get("profile") or m.get("member_id")) for v in running)]
+    # Un bot déjà au travail pour ce groupe n'est plus refusé (49 refus « déjà en train de travailler » dans le
+    # groupe alpha, 2026-11-16 à 18) : la nouvelle tâche lui arrive dans son tour en cours (recadrage, steer.py), il
+    # garde ce qu'il a fait et enchaîne. Refus seulement si le recadrage ne passe pas (tour qui finit à l'instant).
+    steered, refused = [], []
+    for m, task in busy:
+        try:
+            from .steer import redirect_turn
+            ok = redirect_turn(room, str(m.get("profile") or m.get("member_id")),
+                               f"{me_member.get('display_name') or me_member.get('handle')} (meneur) te confie en plus, "
+                               f"à faire dans ce même tour après ta tâche en cours :\n{task}")
+        except Exception as exc:
+            ok = False
+            _log("dispatch_steer", False, room_id=room_id, bot=m.get("handle"), cause=str(exc)[:200])
+        (steered if ok else refused).append(m.get("handle"))
+    if steered:
+        _log("dispatch_steer", True, caller=me, room_id=room_id, bots=steered)
+    picked = [(m, t) for m, t in picked if all(m is not b for b, _ in busy)]
+    if refused and not picked and not steered:
+        return err(f"déjà en train de travailler pour ce groupe : {', '.join(refused)} ; son tour finit à l'instant, "
+                   "redonne-lui la tâche quand son résultat arrive")
+    with _jobs_lock:
+        running = [v for v in _jobs.values() if v["status"] == "running"]
         if len(running) + len(picked) > MAX_RUNNING:
             return err(f"au plus {MAX_RUNNING} tâches en même temps ({len(running)} en cours)")
         try:
@@ -513,7 +661,7 @@ def group_dispatch(args: dict, _peer_ok: bool = False, **kw) -> str:
                 + f"But du groupe : {ctx.get('purpose') or '(non précisé)'}\n"
                 f"Notes partagées : {ctx.get('notes') or '(aucune)'}\n\n"
                 f"Derniers messages du groupe :\n{history}\n\n{_board(room_id)}\n\n"
-                f"Ta tâche :\n{task}\n\n"
+                f"Ta tâche :\n{task}\n\n{MEMBER_RULES}\n\n"
                 "Fais le travail maintenant avec tes outils. Réponds uniquement par ton résultat final, clair et "
                 "complet, sans formule de politesse et sans citer personne avec @.")
             jid = uuid.uuid4().hex[:12]
@@ -525,9 +673,11 @@ def group_dispatch(args: dict, _peer_ok: bool = False, **kw) -> str:
                              name=f"dispatch-{bot}", daemon=True).start()
             started.append(m.get("handle"))
     _log("dispatch", True, caller=me, room_id=room_id, bots=started)
-    return json.dumps({"ok": True, "started": started, "note": (
+    return json.dumps({"ok": True, "started": started, **({"steered": steered} if steered else {}),
+                       **({"refused_busy": refused} if refused else {}), "note": (
+        (f"Déjà au travail, recadrés avec la tâche en plus : {', '.join(steered)}. " if steered else "") +
         "Ils travaillent en même temps. Chaque résultat sera posté dans le groupe et te citera : tu reprendras la "
-        "main à ce moment-là. En attendant, fais ta propre part et dis à Yoan qui travaille sur quoi, sans citer "
+        "main à ce moment-là. En attendant, dis à Yoan qui travaille sur quoi, sans citer "
         "les bots avec @ (une mention lancerait un tour de plus).")}, ensure_ascii=False)
 
 
@@ -550,7 +700,7 @@ SCHEMA = {
         "Table ronde : si tu es le meneur d'un groupe, fais travailler plusieurs membres EN MÊME TEMPS au lieu "
         "de les citer un par un. Donne une tâche précise par bot ; chacun travaille en coulisse, puis son "
         "résultat est posté dans le groupe et te cite pour que tu reprennes la main. Ne te confie rien à "
-        "toi-même : fais ta part dans ton tour. Ne cite pas avec @ les bots à qui tu viens de répartir le "
+        "toi-même : le meneur coordonne et ne fait pas le travail. Ne cite pas avec @ les bots à qui tu viens de répartir le "
         "travail (cela lancerait en plus leur tour normal, l'un après l'autre)."),
     "parameters": {"type": "object", "properties": {
         "room_id": {"type": "string", "description": "le groupe (voir group_list)"},
@@ -610,12 +760,14 @@ def _side_abort(side_id: str, room_id: str) -> None:
 
 
 def _side_post(side_id: str, bot: str, body: str, mention: str, event_id: str | None = None) -> None:
+    own = not mention or mention == bot  # le meneur a répondu lui-même : rien à lui renvoyer
     with _side_lock:
         rec = _side[side_id]
         if not rec["question_posted"]:
-            inbox.submit(rec["room_id"], side_id, {"text": rec["text"], "thread_id": side_id}, "bot")
+            inbox.submit(rec["room_id"], side_id, {"text": rec["text"], "thread_id": side_id}, "bot", closes=own)
         inbox.submit(rec["room_id"], event_id or str(uuid.uuid4()),
-                     {"text": f"[{bot}] {body[:7500]}\n\n@{mention}", "thread_id": side_id}, "bot")
+                     {"text": f"[{bot}] {body[:7500]}" + ("" if own else f"\n\n@{mention}"),
+                      "thread_id": side_id}, "bot", closes=own)
         rec["question_posted"] = True
         rec["left"] -= 1
         if rec["left"] <= 0:
@@ -640,8 +792,6 @@ def rpc_side(params: dict | None = None, **_) -> dict:
         m = by_handle.get(str(h).lstrip("@").casefold())
         if m is None:
             raise ValueError(f"{h} n'est pas membre du groupe")
-        if m.get("member_id") == lead.get("member_id"):
-            raise ValueError("le meneur répond dans la file normale")
         if m not in picked:
             picked.append(m)
     if not picked:
@@ -668,17 +818,25 @@ def rpc_side(params: dict | None = None, **_) -> dict:
         for m in picked:
             bot = m.get("profile") or m.get("member_id")
             name = m.get("display_name") or m.get("handle")
+            # le meneur aussi répond tout de suite s'il n'écrit pas (GLOSSARY.md « Réponse immédiate », 2026-11-17)
+            is_lead = m.get("member_id") == lead.get("member_id")
+            role = (f"{lead_guard.SIDE_MARK} Tu es le meneur du groupe : tu coordonnes et tu ne fais pas le travail "
+                    f"toi-même. Tout travail part vers les membres avec group_dispatch (room_id {room_id}) : ils "
+                    "travaillent en même temps et leurs résultats te reviennent dans le groupe. Tu peux lire, répondre "
+                    "et résumer ; les autres outils te sont refusés." + LEAD_RULES if is_lead else
+                    f"Le meneur {lead.get('display_name') or lead.get('handle')} reprendra ensuite la main.\n\n"
+                    + MEMBER_RULES)
             prompt = (
                 f"[Groupe « {room.get('name')} »] Tu es {name}. Yoan t'écrit directement pendant qu'une autre "
                 "discussion occupe le groupe : tu lui réponds en parallèle, en coulisse. Ta réponse sera postée "
-                f"telle quelle dans le groupe sous ton nom, juste après son message, puis le meneur "
-                f"{lead.get('display_name') or lead.get('handle')} reprendra la main.\n\n"
+                f"telle quelle dans le groupe sous ton nom, juste après son message. {role}\n\n"
                 f"But du groupe : {ctx.get('purpose') or '(non précisé)'}\n"
                 f"Notes partagées : {ctx.get('notes') or '(aucune)'}\n\n"
                 f"Derniers messages du groupe :\n{history}\n\n{_board(room_id)}\n\n"
                 f"Message de Yoan :\n{text}\n\n"
-                "Fais le travail maintenant avec tes outils. Réponds uniquement par ton résultat, clair et complet, "
-                "sans formule de politesse et sans citer personne avec @ (une mention lancerait un tour du groupe).")
+                + ("Coordonne maintenant. Réponds uniquement par ton résultat, clair et complet, " if is_lead else
+                   "Fais le travail maintenant avec tes outils. Réponds uniquement par ton résultat, clair et complet, ")
+                + "sans formule de politesse et sans citer personne avec @ (une mention lancerait un tour du groupe).")
             jid = uuid.uuid4().hex[:12]
             _jobs[jid] = {"room_id": room_id, "room": room.get("name"), "bot": bot, "handle": m.get("handle"),
                           "name": name, "task": text[:200], "started": now, "status": "running",
@@ -688,6 +846,22 @@ def rpc_side(params: dict | None = None, **_) -> dict:
                              name=f"side-{bot}", daemon=True).start()
     _log("side", True, room_id=room_id, bots=[m.get("handle") for m in picked])
     return {"ok": True, "side_id": side_id, "started": [m.get("handle") for m in picked]}
+
+
+def wait_side(room_id: str, handle: str, poll_s: float = 2.0) -> float:
+    """Tour de discussion d'un bot qui répond déjà en coulisse à Yoan : il attend la fin de cette réponse (un bot
+    ne tient qu'un tour à la fois ; GLOSSARY.md « Réponse immédiate », 2026-11-17). Rend l'attente en secondes."""
+    def busy() -> bool:
+        with _jobs_lock:
+            return any(v.get("kind") == "side" and v["status"] == "running" and v["room_id"] == room_id
+                       and str(v.get("handle") or "").casefold() == handle.casefold() for v in _jobs.values())
+    t0 = time.time()
+    while busy() and time.time() - t0 < TIMEOUT_S:
+        time.sleep(poll_s)
+    waited = time.time() - t0
+    if waited >= poll_s:
+        _log("side_wait", True, room_id=room_id, bot=handle, waited_s=round(waited, 1))
+    return waited
 
 
 def recover_side() -> int:

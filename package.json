@@ -3,11 +3,14 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "dompurify": "3.4.17",
+    "marked": "18.2.0",
+    "solid-js": "1.9.19",
     "web-push": "3.6.7"
   },
   "scripts": {
     "check": "bun test/contract-check.ts",
-    "typecheck": "tsc -p jsconfig.json",
+    "typecheck": "tsc -p web/tsconfig.json",
     "smoke": "bun test/smoke.ts",
     "release": "bun scripts/release.ts",
     "stage": "bun server.ts stage",
@@ -16,10 +19,17 @@
     "check:snapshot": "sh test/contract-check.sh snapshot",
     "check:fresh": "sh test/contract-check.sh fresh",
     "hooks:install": "git config core.hooksPath .githooks",
-    "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true"
+    "postinstall": "git config core.hooksPath .githooks 2>/dev/null || true",
+    "build": "vite build --config web/vite.config.ts --logLevel warn",
+    "dev": "vite --config web/vite.config.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "playwright-core": "1.64.1",
-    "typescript": "^7.0.2"
+    "prettier": "3.10.1",
+    "typescript": "^7.0.2",
+    "vite": "8.2.6",
+    "vite-plugin-solid": "2.11.16"
   }
 }

@@ -2,7 +2,7 @@
 # dashboard.basic_auth (mot de passe généré, jamais dans le dépôt). Aucune plateforme (ni Telegram, ni API, ni A2A) :
 # seul le webapp écoute, sur 127.0.0.1:9320 (la prod : 9120).
 model:
-  default: deepseek-v4.1-flash
+  default: hy4-flash-free
   provider: opencode-go
   base_url: https://opencode.ai/zen/go/v1
   api_mode: chat_completions
@@ -10,7 +10,7 @@ agent:
   max_turns: 40
   reasoning_effort: low
   reasoning_overrides:
-    deepseek-v4.1-flash: low
+    hy4-flash-free: low
 terminal:
   backend: local
   cwd: '~'

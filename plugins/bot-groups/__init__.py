@@ -242,7 +242,7 @@ def group_create(args: dict, **kw) -> str:
             created, ctx = _rpc(
                 ("groups.create", {"room_id": room_id, "name": name, "members": members}),
                 ("groups.context", {"room_id": room_id, "event_id": str(uuid.uuid4()), "purpose": purpose,
-                                    "notes": f"Groupe créé par le bot {me}. Meneur : {me}.",
+                                    "notes": f"Groupe créé par le bot {me}.",  # le meneur vit dans lead_member_id : une note « Meneur : X » vieillit mal (issue 91 point 8)
                                     "routing": "lead", "lead_member_id": me}),
             )
             led["rooms"][room_id] = {"name": name, "creator": me, "members": profiles, "created": time.time()}
@@ -304,11 +304,20 @@ SCHEMAS = [
 
 
 def register(ctx) -> None:
+    from . import lifecycle  # rechargement à chaud : génération, boucles de fond relayées, RPC reload / health
+    gen = lifecycle.begin()
+    ctx.on_unload(lambda: lifecycle.retire(gen))
+    ctx.register_rpc("reload", lifecycle.rpc_reload)
+    ctx.register_rpc("health", lifecycle.health)
+    from . import live  # texte en direct des bots de groupe (hooks on_stream_*)
+    live.register(ctx)
     for schema, handler, emoji in SCHEMAS:
         ctx.register_tool(name=schema["name"], toolset=TOOLSET, schema=schema, handler=handler,
                           description=schema["description"], emoji=emoji)
     from . import mention  # @yoan : consigne + notif prioritaire
     mention.register(ctx)
+    from . import lead_guard  # le meneur coordonne sans agir : outils hors liste blanche refusés (ADR 0003)
+    lead_guard.register(ctx)
     from . import dispatch  # table ronde : le meneur fait travailler plusieurs bots en même temps
     ctx.register_tool(name=dispatch.SCHEMA["name"], toolset=TOOLSET, schema=dispatch.SCHEMA,
                       handler=dispatch.group_dispatch, description=dispatch.SCHEMA["description"], emoji="🪑")
@@ -327,9 +336,17 @@ def register(ctx) -> None:
     trace.register(ctx)
     from . import clock  # horloge : heure de Paris et écart depuis le tour précédent, à chaque tour
     clock.register(ctx)
-    from . import inbox  # messages en attente : posés entre deux tours, ceux de Yoan d'abord
+    from . import inbox  # gardés entre deux tours : résultats, recadrages lus, demandes suivantes (/q)
     inbox.install()
     ctx.register_rpc("inbox.send", inbox.rpc_send)
+    from . import yaia
+    ctx.register_rpc("yaia.send", yaia.rpc_send)
     ctx.register_rpc("inbox.status", inbox.rpc_status)
+    ctx.register_rpc("inbox.cancel", inbox.rpc_cancel)
+    from . import steer  # recadrage : un message de Yoan entre dans le tour du bot qui travaille
+    ctx.register_rpc("steer.send", steer.rpc_send)
+    ctx.register_rpc("steer.status", lambda params=None, **_: steer.status())
+    ctx.register_tool(name=steer.SCHEMA["name"], toolset=TOOLSET, schema=steer.SCHEMA,  # recadrage par le meneur
+                      handler=steer.group_steer, description=steer.SCHEMA["description"], emoji="🧭")
     from . import resume  # tours bloqués après un redémarrage : relancés seuls
-    resume.start()
+    resume.start(gen)

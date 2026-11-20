@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import _log
+from . import _log, routing
 
 MIN_BOTS = 2
 
@@ -100,6 +100,18 @@ def rewrite(text: str, info: dict) -> str | None:
         lead_id = (lead or {}).get("member_id", "")
         with dispatch._jobs_lock:
             busy = {v["bot"] for v in dispatch._jobs.values() if v["status"] == "running" and v["room_id"] == info["room_id"]}
+        if not is_lead and lead:
+            # Groupe à meneur : un membre ne répartit plus le travail (issue 91, point 12 : 35 tables rondes sur 43
+            # lancées par des membres). Les coéquipiers cités perdent leur effet et la proposition va au meneur, qui
+            # confie lui-même. Sans meneur, le parallèle entre membres reste (1.17.0).
+            cited = [m for m, _ in plan(cleaned, members, me, skip=(me, lead_id))]
+            if not cited:
+                return cleaned if cleaned != text else None
+            names = ", ".join(m.get("display_name") or m["handle"] for m in cited)
+            _log("fanout_to_lead", True, room_id=info["room_id"], bot=info.get("handle"),
+                 cited=[m["handle"] for m in cited])
+            return strip_at(cleaned, [m["handle"] for m in cited]).rstrip() + (
+                f"\n\n@{lead['handle']} : je propose de confier la suite à {names} ; à toi de répartir.")
         picked = [(m, part) for m, part in plan(cleaned, members, lead_id if is_lead else me, skip=(me, lead_id))
                   if (m.get("profile") or m.get("member_id")) not in busy]
         if len(picked) < (MIN_BOTS if is_lead else 1):
@@ -224,7 +236,7 @@ def add_at(text: str, info: dict) -> str | None:
             out.append(rx.sub(sub, text[a:b]))
             pos = b
         new = "".join(out) + text[pos:]
-        cited = {h.casefold() for h in re.findall(r"(?<![\w@])@([\w.-]+)", "".join(new[a:b] for a, b in _live(new)))}
+        cited = routing.cited_handles("".join(new[a:b] for a, b in _live(new)), names.values())
         missing = [h for h in _ui_assignees(text, names) if h.casefold() not in cited]
         if missing:
             new = new.rstrip() + "\n\n" + " ".join("@" + h for h in missing)

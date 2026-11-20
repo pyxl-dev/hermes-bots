@@ -59,9 +59,37 @@ TYPES = {
 _GUESS = ("recap", "table", "budget", "steps", "choices", "checklist", "card", "chips", "actions")
 
 
+def _rows(b):
+    """Lignes de tableau écrites en objets ({"0": ..., "1": ...} ou {"colonne": ...}) : remises en listes dans l'ordre
+    des colonnes (5 tableaux illisibles les 17 et 18/11, issue 91 point 6).
+    Aussi : ligne plus courte que les colonnes (cellule oubliée) complétée par « - », en-tête vide (coin d'un
+    tableau croisé) nommé « élément »."""
+    if not (isinstance(b, dict) and b.get("type") == "table" and isinstance(b.get("rows"), list)
+            and isinstance(b.get("columns"), list) and all(isinstance(c, str) for c in b["columns"])):
+        return b
+    cols = [c if c.strip() else "élément" for c in b["columns"]]
+    if not any(c.strip() for c in b["columns"]):
+        return b
+
+    def fix(r):
+        if isinstance(r, dict):
+            if all(str(i) in r for i in range(len(cols))):
+                r = [r[str(i)] for i in range(len(cols))]
+            elif all(c in r for c in b["columns"]):
+                r = [r[c] for c in b["columns"]]
+            else:
+                r = list(r.values())
+        if isinstance(r, list) and 0 < len(r) < len(cols):
+            r = r + ["-"] * (len(cols) - len(r))
+        return r
+    return {**b, "columns": cols, "rows": [fix(r) for r in b["rows"]]}
+
+
 def _with_type(b):
     """Bloc sans "type" (oubli du bot, 2026-11-15) : premier type dont il remplit les champs."""
-    if not isinstance(b, dict) or "type" in b:
+    if isinstance(b, dict) and "type" in b:
+        return _rows(b)
+    if not isinstance(b, dict):
         return b
     for t in _GUESS:
         if TYPES[t]({**b, "type": t}):
@@ -116,6 +144,46 @@ def _quotes(raw: str) -> str:
     return "".join(out)
 
 
+def _brackets(raw: str) -> str:
+    """Crochets et accolades déséquilibrés (« Expecting ',' delimiter » : le bot oublie un ] de fin de ligne de
+    tableau, 9 blocs les 17 et 18/11) : un fermant qui ne correspond pas reçoit d'abord les fermants qui manquent,
+    et la fin du texte ferme ce qui reste ouvert."""
+    out, stack, ins, i = [], [], False, 0
+    pair = {"[": "]", "{": "}"}
+    while i < len(raw):
+        c = raw[i]
+        if ins:
+            if c == "\\":
+                out.append(raw[i:i + 2])
+                i += 2
+                continue
+            if c == '"':
+                ins = False
+        elif c == '"':
+            ins = True
+        elif c in pair:
+            stack.append(pair[c])
+        elif c in "]}":
+            if c not in stack:
+                i += 1  # fermant en trop : ignoré
+                continue
+            while stack and stack[-1] != c:
+                out.append(stack.pop())
+            stack.pop()
+        out.append(c)
+        i += 1
+    return "".join(out) + "".join(reversed(stack))
+
+
+_ROW_OPEN = re.compile(r'\]\s*,\s*"(?![^"]*"\s*:)')
+
+
+def _row_open(raw: str) -> str:
+    """Ligne de tableau sans son [ d'ouverture (`],"cellule",...]` au lieu de `],["cellule",...]`, 18/11) :
+    après un ], une chaîne qui n'est pas une clé ouvre une nouvelle ligne. Essayé en dernier."""
+    return _ROW_OPEN.sub('],["', raw)
+
+
 def _commas(raw: str) -> str:
     """Virgule finale avant } ou ] (« Expecting property name ») retirée."""
     return re.sub(r",(\s*[}\]])", r"\1", raw)
@@ -128,7 +196,9 @@ def _load(raw: str):
     except ValueError as first:
         err = first
     for name, txt in (("brut", raw), ("guillemets", _quotes(raw)), ("virgule finale", _commas(raw)),
-                      ("guillemets et virgule finale", _commas(_quotes(raw)))):
+                      ("guillemets et virgule finale", _commas(_quotes(raw))), ("crochets", _brackets(raw)),
+                      ("guillemets et crochets", _commas(_brackets(_quotes(raw)))),
+                      ("ligne sans crochet ouvrant", _brackets(_row_open(raw)))):
         for how, fn in (("", json.loads), ("blocs collés, ", _seq)):
             try:
                 return fn(txt), f"{how}{name} ({err})".replace("brut (", "(").replace(", (", " (")

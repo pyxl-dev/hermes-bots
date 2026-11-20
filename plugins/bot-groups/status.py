@@ -41,13 +41,29 @@ print(f"horloge : {n_seen} conversations suivies ; échecs : {len(ck)}")
 for r in ck[-3:]:
     print(f"  ÉCHEC {r['ts']} clock {r.get('session', '')} : {r.get('cause', '')}")
 
-# messages en attente (inbox.py) : gardés pendant une discussion, posés entre deux tours
+# inbox.py : messages gardés pendant une discussion (demandes suivantes, recadrages lus, résultats), posés entre deux tours
 inbox = json.loads((d / "inbox.json").read_text()) if (d / "inbox.json").exists() else {}
 ib = [r for r in rows if r["action"] == "inbox_flush"]
 ibf = [r for r in ib if not r["ok"]]
-print(f"messages en attente : {sum(len(v) for v in inbox.values())} gardés ; posés : {len(ib) - len(ibf)} fois ; échecs : {len(ibf)}")
+print(f"inbox : {sum(len(v) for v in inbox.values())} gardés ; posés : {len(ib) - len(ibf)} fois ; échecs : {len(ibf)}")
 for r in ibf[-3:]:
     print(f"  ÉCHEC {r['ts']} inbox_flush {r.get('room_id', '')[:8]} : {r.get('cause', '')}")
+# recadrages (steer.py) : par issue (steered, side, held, fallback), et échecs
+st = [r for r in rows if r["action"] == "steer_send"]
+stf = [r for r in st if not r["ok"]]
+modes = {}
+for r in st:
+    if r not in stf:
+        modes[r.get("mode")] = modes.get(r.get("mode"), 0) + 1
+print(f"recadrages : {modes or 'aucun'} ; échecs : {len(stf)}")
+for r in stf[-5:]:
+    print(f"  ÉCHEC {r['ts']} {r['action']} {r.get('bot', '')} : {r.get('cause', '')}")
+ls = [r for r in rows if r["action"] == "lead_steer"]
+lsf = [r for r in ls if not r["ok"]]
+lsr = [r for r in ls if r["ok"] and r.get("refused")]
+print(f"recadrages du meneur : {len(ls) - len(lsf) - len(lsr)} pris ; refusés : {len(lsr)} ; échecs : {len(lsf)}")
+for r in lsf[-3:]:
+    print(f"  ÉCHEC {r['ts']} lead_steer {r.get('bot', '')} : {r.get('cause', '')}")
 
 # tableau du groupe (tasks.py) : fermetures en fin de discussion, rattrapage Jev, échecs
 st = [r for r in rows if r["action"] == "task_settle"]

@@ -226,9 +226,9 @@ def sweep(window_s: float = 2 * 86400) -> int:
     return n
 
 
-def _sweeper() -> None:
-    while True:
-        time.sleep(300)
+def _sweeper(gen: int) -> None:
+    from . import lifecycle
+    while lifecycle.wait(gen, 300):  # s'arrête dès qu'un chargement plus récent existe (rechargement à chaud)
         with contextlib.suppress(Exception):
             sweep()
             purge()
@@ -266,6 +266,53 @@ def ops_from_stream(text: str) -> list[dict]:
         elif kind == "result":
             buf = ""
     return ops
+
+
+def stream_tail(text: str) -> str | None:
+    """Texte écrit depuis le dernier outil d'un flux stream-json en cours : la réponse que le bot est en train
+    d'écrire. None une fois le flux fini (``result``)."""
+    buf = ""
+    for line in text.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        kind = ev.get("type") if isinstance(ev, dict) else None
+        if kind == "text":
+            buf += str(ev.get("text") or "")
+        elif kind in ("tool_use", "tool_result"):
+            buf = ""
+        elif kind == "result":
+            return None
+    return buf
+
+
+def _engine_sessions(room_id: str, profile: str) -> list[str]:
+    try:
+        with contextlib.closing(_ro(_profile_db(profile))) as con:
+            return [r["id"] for r in con.execute("select id from sessions where title = ?", (f"Group: {room_id}",)).fetchall()]
+    except sqlite3.Error as exc:
+        _fail("engine_sessions", exc, room_id=room_id, member=profile)
+        return []
+
+
+def _live(row: dict, room_id: str) -> dict | None:
+    """Réponse en cours d'écriture d'un fil qui tourne : ``{"id", "text", "done"}`` (texte en direct, voir live.py)."""
+    if _status(row) != "running":
+        return None
+    if row["kind"] == "engine":
+        from . import live
+        got = live.latest(_engine_sessions(room_id, row["profile"]), since=float(row.get("started") or 0) - 5)
+    else:
+        from .dispatch import JOBS_DIR
+        try:
+            tail = stream_tail((JOBS_DIR / f"{row['jid']}.out").read_text(errors="replace"))
+        except OSError:
+            tail = None
+        got = {"id": f"r:{row['tid']}", "text": tail, "done": False} if tail is not None else None
+    if not got or not (got["text"] or "").strip():
+        return None
+    return {**got, "text": got["text"].lstrip()[:TEXT_CAP * 4]}
 
 
 def round_start(jid: str, meta: dict) -> None:
@@ -463,8 +510,18 @@ def rpc_read(params: dict | None = None, **_) -> dict:
     status = _status(row)
     return {"trace_id": tid, "member_id": row.get("member_id"), "kind": row["kind"], "status": status,
             "label": row.get("label") or "", "started": row.get("started"), "ended": row.get("ended"),
-            "total": len(entries),
+            "total": len(entries), "live": _live(row, room_id),
             "entries": [e for e in entries if e["n"] > after or e.get("id") in opened]}
+
+
+def rpc_live(params: dict | None = None, **_) -> dict:
+    """PWA : la réponse en cours d'écriture de chaque bot qui travaille dans ce groupe, relevée souvent (texte en direct)."""
+    room_id = str((params or {}).get("room_id") or "")
+    out = {}
+    for tid, row in _rows(room_id).items():
+        if _status(row) == "running" and (got := _live(row, room_id)):
+            out[tid] = {**got, "member_id": row.get("member_id")}
+    return {"live": out}
 
 
 # ---------- arrêt d'un seul bot ----------
@@ -547,10 +604,10 @@ def rpc_dispatch_stop(params: dict | None = None, **_) -> dict:
 def register(ctx) -> None:
     ctx.register_rpc("trace.list", rpc_list)
     ctx.register_rpc("trace.read", rpc_read)
+    ctx.register_rpc("trace.live", rpc_live)
     ctx.register_rpc("member.stop", rpc_member_stop)
     ctx.register_rpc("dispatch.stop", rpc_dispatch_stop)
-    if not _SHARED.sweeper:
-        _SHARED.sweeper = True
-        threading.Thread(target=_sweeper, name="bot-groups-trace-sweeper", daemon=True).start()
+    from . import lifecycle
+    threading.Thread(target=_sweeper, args=(lifecycle.current(),), name="bot-groups-trace-sweeper", daemon=True).start()
     _log("trace_register", True, pid=os.getpid(), home=os.environ.get("HERMES_HOME", ""))
     purge()

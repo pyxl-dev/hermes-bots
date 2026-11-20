@@ -1,9 +1,8 @@
 node_modules
-.env*
-!.env.example
 .DS_Store
 /releases/
 /current
 /next
 /previous
 *.tmp
+/app/

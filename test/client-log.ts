@@ -6,15 +6,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { alert, log } from "../lib/journal";
 
-const home = mkdtempSync(join(tmpdir(), "bots-log-")), PORT = 19100 + Math.floor(Math.random() * 100);
-mkdirSync(join(home, "bin")); const calls = join(home, "hub-calls.txt");
-writeFileSync(join(home, "bin", "hub-notify"), `#!/bin/sh\necho "$@" >> ${calls}\n`); chmodSync(join(home, "bin", "hub-notify"), 0o755);
+const home = mkdtempSync(join(tmpdir(), "bots-log-")),
+  PORT = 19100 + Math.floor(Math.random() * 100);
+mkdirSync(join(home, "bin"));
+const calls = join(home, "hub-calls.txt");
+writeFileSync(join(home, "bin", "hub-notify"), `#!/bin/sh\necho "$@" >> ${calls}\n`);
+chmodSync(join(home, "bin", "hub-notify"), 0o755);
 const env = { ...process.env, HOME: home, PORT: String(PORT) };
 const srv = spawn("bun", [join(import.meta.dir, "..", "server.ts")], { env, stdio: "ignore" });
 const post = (b: unknown) => fetch(`http://127.0.0.1:${PORT}/bots/log`, { method: "POST", body: JSON.stringify(b) });
 let failure = "";
 try {
-  for (let i = 0; i < 100 && !failure; i++) { try { await fetch(`http://127.0.0.1:${PORT}/bots/index.html`); break; } catch { await Bun.sleep(100); } }
+  for (let i = 0; i < 100 && !failure; i++) {
+    try {
+      await fetch(`http://127.0.0.1:${PORT}/bots/index.html`);
+      break;
+    } catch {
+      await Bun.sleep(100);
+    }
+  }
   const bad = await post({ version: "v-test", kind: "nope", msg: "x" });
   if (bad.status !== 400) failure = "un corps invalide doit donner 400, reçu " + bad.status;
   const a = await post({ version: "v-test", kind: "rpc", msg: "session.resume : invalid_params (inline_images)", rpc: "session.resume", code: -32602 });
@@ -24,8 +34,15 @@ try {
   // URL mal encodée : 400, sans erreur 500 ni alerte Hub
   const enc = await fetch(`http://127.0.0.1:${PORT}/bots/%E0`);
   if (!failure && enc.status !== 400) failure = "une URL mal encodée doit donner 400, reçu " + enc.status;
-  await Bun.sleep(600);
-  const rows = readFileSync(join(home, ".local/state/hermes-bots-pwa/actions.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  // les alertes Hub partent en processus séparés : attendre qu'elles arrivent (5 s au plus), pas un délai fixe
+  // (600 ms ne suffisaient pas sous charge : release du 2026-11-18 refusée, « 0 envoyée(s) », verte à la relance)
+  for (const t = Date.now() + 5000; Date.now() < t; await Bun.sleep(100))
+    if (existsSync(calls) && readFileSync(calls, "utf8").trim().split("\n").length >= 2) break;
+  await Bun.sleep(200); // une 3e alerte en trop aurait le temps d'arriver
+  const rows = readFileSync(join(home, ".local/state/hermes-bots-pwa/actions.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
   const ce = rows.filter((r) => r.action === "client_error");
   if (!failure && ce.length !== 3) failure = `3 client_error attendus, ${ce.length} trouvés`;
   const alerts = existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n") : [];
@@ -35,6 +52,14 @@ try {
   const st = spawnSync("bun", [join(import.meta.dir, "..", "server.ts"), "status"], { env, encoding: "utf8" }).stdout;
   if (!failure && !(/v-test : 2/.test(st) && /v-autre : 1/.test(st))) failure = "status ne compte pas les erreurs par version :\n" + st;
   if (!failure && !/lignes illisibles dans le journal : 1/.test(st)) failure = "status doit compter la ligne illisible :\n" + st;
-} finally { srv.kill(); }
-if (failure) { console.error("client-log ÉCHEC : " + failure); log("client_log_test", false, failure.split("\n")[0]); alert("client_log_test", failure.split("\n")[0]); process.exit(1); }
-log("client_log_test", true); console.log("client-log : erreurs journalisées, alerte une fois par version, status par version");
+} finally {
+  srv.kill();
+}
+if (failure) {
+  console.error("client-log ÉCHEC : " + failure);
+  log("client_log_test", false, failure.split("\n")[0]);
+  alert("client_log_test", failure.split("\n")[0]);
+  process.exit(1);
+}
+log("client_log_test", true);
+console.log("client-log : erreurs journalisées, alerte une fois par version, status par version");

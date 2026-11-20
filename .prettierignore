@@ -1,0 +1,11 @@
+releases/
+current
+next
+previous
+app/
+node_modules/
+bun.lock
+test/fixtures/
+design/
+docs/
+*.md

@@ -14,7 +14,9 @@ mkdirSync(LOG_DIR, { recursive: true });
 export const LOG_OLD = LOG + ".1";
 const LOG_MAX = Number(process.env.HERMES_BOTS_LOG_MAX || 5 * 1024 * 1024);
 export const log = (action: string, ok: boolean, cause?: string, extra?: Record<string, unknown>) => {
-  try { if (statSync(LOG).size > LOG_MAX) renameSync(LOG, LOG_OLD); } catch {}
+  try {
+    if (statSync(LOG).size > LOG_MAX) renameSync(LOG, LOG_OLD);
+  } catch {}
   appendFileSync(LOG, JSON.stringify({ ts: new Date().toISOString(), action, ok, ...(cause ? { cause } : {}), ...(extra ?? {}) }) + "\n");
 };
 
@@ -25,10 +27,14 @@ const HUB_NOTIFY = join(homedir(), "bin", "hub-notify");
 export function alert(action: string, cause: string, opts: { key?: string; windowMs?: number } = {}) {
   const key = opts.key ?? action;
   let last: Record<string, number> = {};
-  try { last = JSON.parse(readFileSync(ALERTS, "utf8")); } catch {}
+  try {
+    last = JSON.parse(readFileSync(ALERTS, "utf8"));
+  } catch {}
   if (Date.now() - (last[key] ?? 0) < (opts.windowMs ?? 3600_000)) return;
   last[key] = Date.now();
-  const tmp = `${ALERTS}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(last)); renameSync(tmp, ALERTS); // atomique
+  const tmp = `${ALERTS}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(last));
+  renameSync(tmp, ALERTS); // atomique
   execFile(HUB_NOTIFY, ["-t", "hermes-bots", "-T", `PWA Hermes Bots : échec ${action}`, "-p", "4", cause.slice(0, 500)], (e) => {
     log("alert", !e, e ? e.message : key);
   });

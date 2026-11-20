@@ -4,5 +4,5 @@ set -e
 C="sh $(git rev-parse --show-toplevel)/scripts/checks.sh"
 $C served
 $C secrets
-# shellcheck disable=SC2046  # la liste de fichiers doit arriver en arguments séparés
 $C static $(git diff --cached --name-only --diff-filter=ACMR)
+$C format $(git diff --cached --name-only --diff-filter=ACMR)

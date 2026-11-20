@@ -9,8 +9,24 @@ import { join } from "node:path";
 
 const HOME = process.env.HERMES_TEST_HOME || join(homedir(), ".hermes-test");
 export const LOCK = join(HOME, "test-gateway.lock");
-const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const holder = () => Number((() => { try { return readFileSync(join(LOCK, "pid"), "utf8"); } catch { return "0"; } })()) || 0;
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const holder = () =>
+  Number(
+    (() => {
+      try {
+        return readFileSync(join(LOCK, "pid"), "utf8");
+      } catch {
+        return "0";
+      }
+    })()
+  ) || 0;
 
 /** Attend le gateway de test (10 min au plus) puis le garde jusqu'à la sortie du processus. Renvoie les ms d'attente. */
 export async function holdTestGateway(who: string, maxMs = 600_000): Promise<number> {
@@ -23,16 +39,30 @@ export async function holdTestGateway(who: string, maxMs = 600_000): Promise<num
       mkdirSync(LOCK);
       writeFileSync(join(LOCK, "pid"), String(process.pid));
       writeFileSync(join(LOCK, "who"), `${who} (${process.cwd()})`);
-      process.on("exit", () => { if (holder() === process.pid) rmSync(LOCK, { recursive: true, force: true }); });
+      process.on("exit", () => {
+        if (holder() === process.pid) rmSync(LOCK, { recursive: true, force: true });
+      });
       for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => process.exit(130));
       process.env.TEST_GATEWAY_LOCK = "tenu";
       return Date.now() - t0;
     } catch {
       const pid = holder();
-      if (pid && !alive(pid)) { rmSync(LOCK, { recursive: true, force: true }); continue; } // verrou d'un processus mort
-      if (!pid && Date.now() - t0 > 3000) { rmSync(LOCK, { recursive: true, force: true }); continue; } // dossier sans pid (crash entre mkdir et write)
+      if (pid && !alive(pid)) {
+        rmSync(LOCK, { recursive: true, force: true });
+        continue;
+      } // verrou d'un processus mort
+      if (!pid && Date.now() - t0 > 3000) {
+        rmSync(LOCK, { recursive: true, force: true });
+        continue;
+      } // dossier sans pid (crash entre mkdir et write)
       if (!said) {
-        const by = (() => { try { return readFileSync(join(LOCK, "who"), "utf8"); } catch { return "?"; } })();
+        const by = (() => {
+          try {
+            return readFileSync(join(LOCK, "who"), "utf8");
+          } catch {
+            return "?";
+          }
+        })();
         console.log(`  ..  gateway de test occupé par pid ${pid || "?"} : ${by} ; attente`);
         said = true;
       }

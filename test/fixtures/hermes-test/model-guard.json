@@ -2,6 +2,7 @@
   "_doc": "Gateway de test : seuls ces modèles sont autorisés. model-guard lit HOME/.hermes/model-guard.json ; test-gateway.ts lance le gateway avec un HOME dont .hermes pointe sur ~/.hermes-test. faux-modele : le faux modèle local de test/fake-model.ts (profils fx-*).",
   "allowed": [
     "deepseek-v4.1-flash",
-    "faux-modele"
+    "faux-modele",
+    "hy4-flash-free"
   ]
 }

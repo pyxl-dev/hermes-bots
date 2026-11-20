@@ -25,9 +25,7 @@ from . import _caller, _hub, _log, _rpc, HUB_NOTIFY, fanout, ui_guard
 BUN = Path.home() / ".bun" / "bin" / "bun"
 PWA_SERVER = Path.home() / "Projects" / "hermes-bots-pwa" / "server.ts"
 
-import os
-
-PWA_URL = os.environ.get("PWA_URL", "http://127.0.0.1:9131/bots/")
+PWA_URL = __import__("os").environ.get("PWA_URL", "http://127.0.0.1:9131/bots/")
 META_KEY = "hermes-bots-mentions"
 KEEP = 20
 MENTION_RE = re.compile(r"(?<![\w@])@yoan\b", re.IGNORECASE)
@@ -36,9 +34,10 @@ ROOM_TTL = 120.0
 # Message d'un autre bot (message_agent) : la réponse repart d'elle-même chez l'expéditeur.
 BOT_DM_RE = re.compile(r"^\s*Message from [^\n]*?\(@([\w.-]+)\):")
 
-_roles: dict[str, dict] = {}       # session_id -> rôle du dernier tour
-_rooms: dict[str, tuple] = {}      # (nom, handle) -> (horodatage, info)
-_lock = threading.Lock()
+from . import lifecycle  # caches gardés au rechargement à chaud : un tour commencé avant garde son rôle
+_roles: dict[str, dict] = lifecycle.shared("mention.roles", dict)       # session_id -> rôle du dernier tour
+_rooms: dict[str, tuple] = lifecycle.shared("mention.rooms", dict)      # (nom, handle) -> (horodatage, info)
+_lock = lifecycle.shared("mention.lock", threading.Lock)
 
 BASE = ("[Consigne de Yoan] @yoan déclenche une notification prioritaire sur son téléphone. Utilise-le seulement "
         "pour lui demander directement une décision, une validation ou une action, en ouvrant la phrase qui la "
@@ -66,7 +65,7 @@ UI = ("[Consigne de Yoan] Yoan lit ta réponse sur son téléphone, dans l'app H
       "un seul tableau pour plusieurs blocs. Une décision qui bloque ton travail passe par clarify quand tu l'as ; choices sert aux suites "
       "proposées en fin de réponse. Réponse courte ou simple échange : pas de bloc.")
 UI_LEAD_ONLY = " Dans ce groupe, seul le meneur utilise actions et choices."
-_ui_sessions: dict[str, tuple] = {}  # session_id -> (horodatage, est une Bot Chat)
+_ui_sessions: dict[str, tuple] = lifecycle.shared("mention.ui_sessions", dict)  # session_id -> (horodatage, est une Bot Chat)
 
 
 def _is_bot_chat(session_id: str) -> bool:
@@ -93,11 +92,46 @@ def _is_bot_chat(session_id: str) -> bool:
     return ok
 
 
+LEAD_ROLE = ("Tu coordonnes et tu ne fais jamais le travail toi-même : tu peux lire, répondre, résumer et trancher, "
+             "mais toute action (terminal, fichiers, web, code...) part vers un membre avec group_dispatch, ou vers un "
+             "sous-agent avec delegate_task ; ces outils te sont refusés dans ce groupe. Si aucun membre ne convient, "
+             "dis-le à Yoan et propose-lui d'ajouter un bot. Un membre part de travers pendant qu'il travaille : "
+             "recadre-le avec group_steer, il continue avec ta consigne.")
+
+
+# Règles d'équipe portées par le plugin (issue 91, 2026-11-18) : relevées dans le groupe « Renseignement Dofus ».
+# Elles valent pour tout groupe à meneur et ne touchent pas aux SOUL des bots.
+# Yaia parle dans le groupe par yaia.py (« [yaia] texte ») : elle relaie Yoan, elle n'est pas un bot de l'équipe.
+YAIA_RULE = (" Un message qui commence par « [yaia] » vient de Yaia, l'assistante Claude de Yoan : elle écrit pour "
+             "Yoan et à sa vue ; traite-le comme un message de Yoan (même priorité), et réponds dans le groupe.")
+LEAD_RULES = (
+    " Règles de meneur : (1) Tu n'annonces « réparé », « fini » ou « objectif atteint » qu'avec la preuve observée "
+    "(sortie, état vérifié) citée dans ton message ; sinon tu écris « pas encore vérifié ». (2) Une question d'état "
+    "(« situation ? », « où on en est ? ») appelle un état en quelques lignes tiré du tableau et des derniers "
+    "résultats, sans lancer de travail. (3) Tant que le but n'est pas atteint et que tu n'attends rien de Yoan, tu ne "
+    "finis pas ton tour sans avoir confié l'étape suivante avec group_dispatch : l'équipe ne s'arrête que si c'est "
+    "fini ou si tu poses une question à Yoan. (4) Un livrable est vérifié une fois, par le membre le mieux placé ; "
+    "pas de revérification en cascade. (5) Un message de Yoan prime sur toute consigne d'un bot ; si deux consignes "
+    "se contredisent, arrête le membre concerné (group_steer) et demande à Yoan. (6) Chaque membre a un rôle "
+    "(notes du groupe) : tu confies à chacun ce qui relève du sien. (7) Une question de Yoan reçoit sa réponse "
+    "en premier, en clair, dans les premières lignes de ton message, même si un membre a déjà répondu en détail ; "
+    "l'arbitrage et la répartition viennent après (le 18/11, « Comment je teste l'interface ? » a reçu un "
+    "arbitrage, et Yoan a cru qu'on ne lui répondait pas). (8)" + YAIA_RULE)
+MEMBER_RULES = (
+    "[Consigne de Yoan] Règles de membre : (1) Tu ne répartis pas le travail : si un coéquipier doit intervenir, "
+    "dis-le au meneur, c'est lui qui confie. (2) Tu ne revérifies pas le travail d'un autre membre sauf si le meneur "
+    "te le demande. (3) Avant d'agir sur un système (jeu, processus, fichiers partagés), tu vérifies son état réel "
+    "(lancé ou non, connecté, version, lieu) et tu le cites ; jamais de relance en boucle : après deux échecs "
+    "identiques, tu t'arrêtes et tu rends compte. (4) Tu n'écris « réparé » ou « fini » qu'avec la preuve observée. "
+    "(5) Tu ne demandes un geste à Yoan qu'en dernier recours : si un outil ou un script peut le faire, fais-le, et "
+    "une règle qui se répète devient un script plutôt qu'une phrase. (6) Tu restes dans ton rôle (notes du groupe). (7)"
+    + YAIA_RULE)
+
+
 DISPATCH = (" Table ronde : quand plusieurs membres ont chacun une part du travail, appelle group_dispatch "
             "(room_id {room_id}) avec une tâche par bot : ils travaillent en même temps et chaque résultat te revient "
             "dans le groupe. Si tu cites toi-même deux coéquipiers ou plus par @handle, ils sont lancés en parallèle "
-            "automatiquement avec le paragraphe qui les cite : écris alors pour chacun une consigne complète. Fais ta "
-            "propre part dans ton tour.")
+            "automatiquement avec le paragraphe qui les cite : écris alors pour chacun une consigne complète.")
 
 
 def _room_info(name: str, handle: str) -> dict | None:
@@ -143,6 +177,8 @@ def budget(info: dict, r: int | None, n: int) -> str:
             f"Un tour de plus n'a lieu que si quelqu'un cite un coéquipier par @handle ; après le tour {n}, "
             f"plus personne ne parle avant que Yoan relance.{where} Va droit au résultat, ne gaspille pas un tour "
             "en politesses ou en questions que tu peux trancher toi-même.")
+    if info.get("has_lead"):  # fait foi sur toute mention du meneur dans les notes (issue 91 point 8)
+        head += f" Meneur actuel : @{info.get('lead_handle')} (ceci fait foi sur les notes du groupe)."
     last, penult = r is not None and r >= n - 1, r is not None and r == n - 2
     if info.get("has_lead") and info.get("is_lead"):
         if last or penult:
@@ -229,8 +265,43 @@ def _guard_ui(text: str):
     return new
 
 
+def _wait_own_side(text: str) -> None:
+    """Tour de discussion d'un bot qui répond déjà à Yoan en coulisse : il attend la fin de cette réponse."""
+    m = DISCUSSION_RE.search(text)
+    if not m:
+        return
+    try:
+        info = _room_info(m.group(1), m.group(2))
+        if info:
+            from . import dispatch
+            dispatch.wait_side(info["room_id"], info["handle"])
+    except Exception as exc:
+        _log("side_wait", False, error=str(exc)[:200])
+
+
+def role_of(session_id: str) -> dict:
+    """Rôle du tour en cours de cette session ({} si inconnu) ; lu par lead_guard."""
+    with _lock:
+        return dict(_roles.get(session_id) or {})
+
+
+def _is_lead_turn(text: str, info: dict | None, dm: bool, was_lead: bool | None) -> bool:
+    """Ce tour est-il un tour de meneur (ADR 0003) ? Discussion du groupe : d'après le groupe. Réponse immédiate :
+    repère posé par dispatch.rpc_side. Un message sans en-tête de groupe dans une session de meneur (recadrage
+    injecté en cours de tour) garde le rôle ; une tâche de table ronde ou un message d'un bot ne l'ont jamais."""
+    from .lead_guard import SIDE_MARK
+    if info:
+        return bool(info["has_lead"] and info["is_lead"])
+    if SIDE_MARK in text:
+        return True
+    if dm or text.lstrip().startswith(("[Table ronde", "[Groupe", "[Discussion")):
+        return False
+    return bool(was_lead)
+
+
 def pre_llm_call(user_message=None, session_id="", platform="", **_):
     text = user_message if isinstance(user_message, str) else ""
+    _wait_own_side(text)
     if '{"assign"' in text:  # tour de répartition du meneur : JSON seul attendu
         # mémorisé pour transform_llm_output : plusieurs bots choisis partent en parallèle (1.16.0)
         m = DISCUSSION_RE.search(text)
@@ -242,7 +313,8 @@ def pre_llm_call(user_message=None, session_id="", platform="", **_):
             info = None
             _log("mention_room_lookup", False, error=str(exc)[:200])
         with _lock:
-            _roles[session_id] = {"room": info, "routing": msg.group(1) if msg else ""}
+            _roles[session_id] = {"room": info, "routing": msg.group(1) if msg else "",
+                                  "lead": bool(info and info["has_lead"] and info["is_lead"])}
         return None
     role: dict = {"room": None}
     m = DISCUSSION_RE.search(text)
@@ -256,6 +328,7 @@ def pre_llm_call(user_message=None, session_id="", platform="", **_):
     dm = None if m else BOT_DM_RE.match(text)
     if dm:
         role["dm_from"] = dm.group(1)
+    role["lead"] = _is_lead_turn(text, role["room"], bool(dm), (_roles.get(session_id) or {}).get("lead"))
     with _lock:
         if len(_roles) > 500:
             _roles.clear()
@@ -282,10 +355,11 @@ def pre_llm_call(user_message=None, session_id="", platform="", **_):
             _log("task_failed", False, room_id=info["room_id"], op="prompt_block", cause=str(exc)[:200])
     if info and info["has_lead"] and info["is_lead"]:
         return {"context": BASE + " Dans ce groupe tu es le meneur : toi seul mentionnes @yoan, "
-                          "en regroupant ce que l'équipe attend de lui." + extra}
+                          "en regroupant ce que l'équipe attend de lui. " + LEAD_ROLE + LEAD_RULES + extra}
     if info and info["has_lead"]:
         return {"context": f"[Consigne de Yoan] Dans ce groupe, seul le meneur @{info['lead_handle']} "
-                           f"mentionne @yoan. N'écris jamais @yoan : si Yoan doit agir, dis-le à @{info['lead_handle']}." + extra}
+                           f"mentionne @yoan. N'écris jamais @yoan : si Yoan doit agir, dis-le à @{info['lead_handle']}."
+                           "\n\n" + MEMBER_RULES + extra}
     if info:
         return {"context": BASE + extra}
     return {"context": BASE + "\n\n" + CLARIFY + extra}  # hors groupe : un tour de groupe n'a personne pour répondre à clarify

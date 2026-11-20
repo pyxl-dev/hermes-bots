@@ -34,7 +34,9 @@ jobs:
       - name: Secrets (tout l'historique)
         run: sh scripts/checks.sh secrets all
       - name: Types, syntaxe, ruff, contrats
-        run: sh scripts/checks.sh static $(git ls-files 'app/*.js' '*.ts' '*.py' | tr '\n' ' ')
+        run: sh scripts/checks.sh static $(git ls-files 'web/src/*' '*.ts' '*.py' | tr '\n' ' ')
+      - name: Format (prettier)
+        run: sh scripts/checks.sh format $(git ls-files | tr '\n' ' ')
       - name: APP_VERSION
         run: sh scripts/checks.sh version origin/main
         if: github.event_name == 'pull_request'

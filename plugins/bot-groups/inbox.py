@@ -1,4 +1,11 @@
-"""Messages en attente d'un groupe (décidé avec Yoan le 2026-11-16, GLOSSARY.md « Message en attente »).
+"""Ce qui attend d'entrer dans un groupe : résultats des bots, recadrages et demandes suivantes de Yoan.
+
+Mis à jour le 2026-11-17 (GLOSSARY.md « Recadrage », « Demande suivante ») : un message de Yoan pendant une
+discussion recadre le bot qui écrit (steer.py) au lieu d'attendre ; il n'est gardé ici que pour entrer dans le
+fil du groupe (``steer`` : posé dans son propre fil, déjà traité, il n'ouvre ni n'arrête aucune discussion), ou
+parce que le tour a fini sans le lire (``user`` : posé en tête, le bot repart aussitôt avec). Un message ``/q``
+(``next``) attend que la discussion ET ses tables rondes soient finies (un arrêt compte), puis part seul et ouvre
+sa propre discussion ; les suivants, un par un, dans l'ordre. Historique (2026-11-16, « Message en attente ») :
 
 Le moteur ne mène qu'une discussion à la fois, dans l'ordre d'arrivée, et une discussion dure tant que les bots se
 citent : un message de Yoan envoyé pendant ce temps attendait la fin de toute la chaîne, derrière les résultats de
@@ -62,25 +69,48 @@ def held(room_id: str) -> list[dict]:
     return list(_read().get(room_id) or [])
 
 
-def plan(items: list[dict], current_thread: str | None) -> tuple[list[dict], str | None]:
-    """Ce qu'il faut poser maintenant (dans l'ordre) et dans quel fil ; ``([], None)`` = tout garder.
-    Appelé seulement quand aucun tour du moteur n'est vivant. ``current_thread`` : fil de la discussion en cours."""
+# Un résultat de bot ne reste jamais gardé plus de HOLD_MAX_S derrière une discussion qui s'éternise : il entre alors
+# dans le fil en cours (le meneur le lit, la chaîne de relances s'arrête là). Vu le 2026-11-17 : 7 résultats gardés
+# 6 h, la discussion en cours ne finissait jamais (groupe bloqué, moteur arrêté sur ce groupe).
+HOLD_MAX_S = 600
+
+
+def plan(items: list[dict], current_thread: str | None, rounds_running: bool = False,
+         now: float | None = None) -> list[tuple[list[dict], str, bool]]:
+    """Ce qu'il faut poser maintenant, par paquets ``(éléments, fil, clos)`` dans l'ordre ; ``[]`` = tout garder.
+    Appelé seulement quand aucun tour du moteur n'est vivant. ``current_thread`` : fil de la discussion en cours ;
+    ``rounds_running`` : une table ronde du groupe travaille encore. ``clos`` : le paquet est déjà traité et naît
+    fermé (il n'ouvre pas de tour)."""
+    now = time.time() if now is None else now
+    out: list[tuple[list[dict], str, bool]] = []
+    for st in (i for i in items if i.get("kind") == "steer"):
+        out.append(([st], st["payload"]["thread_id"], True))
     users = [i for i in items if i.get("kind") == "user"]
-    bots = [i for i in items if i.get("kind") != "user"]
+    bots = [i for i in items if i.get("kind") == "bot"]
+    nxt = [i for i in items if i.get("kind") == "next"]
     if users:
-        return users + bots, current_thread or users[0]["payload"]["thread_id"]
-    if bots and current_thread is None:
-        return bots, bots[0]["payload"]["thread_id"]
-    return [], None
+        todo = users + bots
+        out.append((todo, current_thread or users[0]["payload"]["thread_id"], all(i.get("closes") for i in todo)))
+    elif bots and current_thread is None:
+        out.append((bots, bots[0]["payload"]["thread_id"], all(i.get("closes") for i in bots)))
+    elif bots and now - min(i["ts"] for i in bots) > HOLD_MAX_S:
+        out.append((bots, current_thread, all(i.get("closes") for i in bots)))
+    elif nxt and current_thread is None and not rounds_running:
+        first = min(nxt, key=lambda i: i["ts"])
+        out.append(([first], first["payload"]["thread_id"], False))
+    return out
 
 
-def submit(room_id: str, event_id: str, payload: dict, kind: str) -> None:
-    """Garde un message pour ce groupe ; le moteur le pose au prochain passage entre deux tours (réveillé ici)."""
+def submit(room_id: str, event_id: str, payload: dict, kind: str, closes: bool = False, who: str | None = None) -> None:
+    """Garde un message pour ce groupe ; le moteur le pose au prochain passage entre deux tours (réveillé ici).
+    ``closes`` : message déjà traité (question et réponse immédiate du meneur lui-même) ; posé seul, il n'ouvre pas
+    de tour de discussion (GLOSSARY.md « Réponse immédiate », 2026-11-17)."""
     text = str((payload or {}).get("text") or "").strip()
     if not room_id or not event_id or not text:
         raise ValueError("room_id, event_id et texte requis")
-    item = {"event_id": str(event_id), "kind": "user" if kind == "user" else "bot", "ts": time.time(),
-            "payload": {"text": text, "thread_id": str(payload.get("thread_id") or event_id)}}
+    item = {"event_id": str(event_id), "kind": kind if kind in ("user", "steer", "next") else "bot", "ts": time.time(),
+            "payload": {"text": text, "thread_id": str(payload.get("thread_id") or event_id)},
+            **({"closes": True} if closes else {}), **({"who": who} if who else {})}
     with _locked():
         data = _read()
         rows = [r for r in data.get(room_id) or [] if r["event_id"] != item["event_id"]] + [item]
@@ -116,8 +146,20 @@ def _draining() -> bool:
         return False
 
 
-def flush(svc, room_id: str) -> bool:
-    """Entre deux tours : pose ce qui doit l'être. Vrai si le groupe a changé. Ne lève jamais."""
+def _rounds_running(room_id: str) -> bool:
+    """Une table ronde (ou une réponse immédiate) de ce groupe travaille encore."""
+    try:
+        from .dispatch import _jobs, _jobs_lock
+    except Exception:
+        return False
+    with _jobs_lock:
+        return any(v["room_id"] == room_id and v["status"] == "running" for v in _jobs.values())
+
+
+def flush(svc, room_id: str, force: bool = False) -> bool:
+    """Entre deux tours : pose ce qui doit l'être. Vrai si le groupe a changé. Ne lève jamais.
+    Appelé par le moteur entre deux tours, et par ``resume.sweep`` pour un groupe bloqué (le moteur ne le prépare
+    plus jusqu'au prochain envoi, donc ne passe plus ici) : ``force`` pose alors les résultats sans attendre."""
     try:
         if not FILE.exists() or not held(room_id) or _draining():
             return False
@@ -129,32 +171,49 @@ def flush(svc, room_id: str) -> bool:
             if not items:
                 return False
             room = svc._room(room_id)
-            todo, thread = plan(items, _current_thread(svc, room))
-            if not todo:
+            batches = plan(items, _current_thread(svc, room), _rounds_running(room_id),
+                           now=float("inf") if force else None)
+            if not batches:
                 return False
             from gateway import hosted_room_discussion as discussion
             from gateway import hosted_rooms
             from gateway.session_hosted_attachments import append_user_event
             gateway_id, epoch = svc._owned_authority(room_id)
-            posted = []
-            for it in todo:
-                payload = discussion.validate_user_payload({**it["payload"], "thread_id": thread})
-                try:
-                    append_user_event(svc, room_id=room_id, event_id=hosted_rooms.user_event_id(it["event_id"]),
-                                      payload=payload, gateway_id=gateway_id, epoch=epoch)
-                except hosted_rooms.EventConflictError:
-                    pass  # déjà dans le groupe (passage précédent interrompu) : rien à refaire
-                posted.append(it["event_id"])
+            posted, todo = [], []
+            for batch, thread, closed in batches:
+                for it in batch:
+                    payload = discussion.validate_user_payload({**it["payload"], "thread_id": thread})
+                    try:
+                        append_user_event(svc, room_id=room_id, event_id=hosted_rooms.user_event_id(it["event_id"]),
+                                          payload=payload, gateway_id=gateway_id, epoch=epoch)
+                    except hosted_rooms.EventConflictError:
+                        pass  # déjà dans le groupe (passage précédent interrompu) : rien à refaire
+                    posted.append(it["event_id"])
+                    todo.append(it)
+                # déjà traité (recadrage lu dans le tour, ou question à laquelle le meneur a répondu lui-même) : la
+                # discussion naît close, aucun bot ne reprend un tour pour y répondre une seconde fois
+                if closed:
+                    last = hosted_rooms.user_event_id(batch[-1]["event_id"])
+                    with contextlib.suppress(hosted_rooms.EventConflictError):
+                        hosted_rooms.append_event(
+                            svc.db_path, room_id=room_id, event_id=f"dactivity:{last}:immediate", kind="room.activity",
+                            actor={"kind": "gateway", "id": gateway_id},
+                            payload={"status": "settled", "reason_code": "answered_immediately", "thread_id": thread,
+                                     "discussion_event_id": last},
+                            authority_gateway_id=gateway_id, authority_epoch=epoch)
             data = _read()
             data[room_id] = [r for r in data.get(room_id) or [] if r["event_id"] not in posted]
             _write(data)
-        n_user = sum(1 for i in todo if i["kind"] == "user")
-        _log("inbox_flush", True, room_id=room_id, user=n_user, bot=len(todo) - n_user, thread=thread,
-             waited_s=round(time.time() - min(i["ts"] for i in todo), 1))
+            thread = batches[-1][1]
+        kinds = {k: sum(1 for i in todo if i["kind"] == k) for k in ("user", "bot", "steer", "next")}
+        mine = [i["ts"] for i in todo if i["kind"] in ("user", "next")]
+        _log("inbox_flush", True, room_id=room_id, **kinds, thread=thread,
+             waited_s=round(time.time() - min(i["ts"] for i in todo), 1),
+             **({"user_waited_s": round(time.time() - min(mine), 1)} if mine else {}))
         return True
     except Exception as exc:
         _log("inbox_flush", False, room_id=room_id, cause=f"{type(exc).__name__}: {exc}"[:300])
-        _hub("Groupe : messages en attente non posés", f"{room_id[:8]} : {str(exc)[:200]}", "4")
+        _hub("Groupe : messages gardés non posés", f"{room_id[:8]} : {str(exc)[:200]}", "4")
         return False
 
 
@@ -180,14 +239,35 @@ def install() -> bool:
 
 
 def rpc_send(params: dict | None = None, **_) -> dict:
-    """PWA : ``{room_id, event_id, payload: {text, thread_id}}`` d'un message de Yoan envoyé pendant une discussion."""
+    """PWA : ``{room_id, event_id, payload: {text, thread_id}, kind?}``. ``kind: "next"`` : demande suivante (/q).
+    ``kind: "context"`` : contexte à lire sans y répondre (résumé de reprise d'un groupe recréé) : il entre déjà clos,
+    aucun bot ne prend de tour pour lui."""
     p = params or {}
-    submit(str(p.get("room_id") or ""), str(p.get("event_id") or ""), p.get("payload") or {}, "user")
-    return {"ok": True, "held": True, "client_event_id": p.get("event_id")}
+    kind = p.get("kind") if p.get("kind") in ("next", "context") else "user"
+    submit(str(p.get("room_id") or ""), str(p.get("event_id") or ""), p.get("payload") or {},
+           "user" if kind == "context" else kind, closes=kind == "context")
+    return {"ok": True, "held": True, "kind": kind, "client_event_id": p.get("event_id")}
+
+
+def rpc_cancel(params: dict | None = None, **_) -> dict:
+    """PWA : ``{room_id, event_id}`` retire une demande suivante pas encore partie ; renvoie son texte, ou
+    ``cancelled: false`` si elle est déjà dans le groupe."""
+    p = params or {}
+    room_id, event_id = str(p.get("room_id") or ""), str(p.get("event_id") or "")
+    with _locked():
+        data = _read()
+        rows = data.get(room_id) or []
+        hit = next((r for r in rows if r["event_id"] == event_id and r["kind"] == "next"), None)
+        if hit is not None:
+            data[room_id] = [r for r in rows if r is not hit]
+            _write(data)
+    _log("inbox_cancel", True, room_id=room_id, found=hit is not None)
+    return {"cancelled": hit is not None, "text": hit["payload"]["text"] if hit else None}
 
 
 def rpc_status(params: dict | None = None, **_) -> dict:
     """PWA : messages de Yoan encore gardés pour ce groupe (bulles à remettre après un rechargement)."""
     room_id = str((params or {}).get("room_id") or "")
-    return {"held": [{"event_id": i["event_id"], "text": i["payload"]["text"], "ts": i["ts"]}
-                     for i in held(room_id) if i["kind"] == "user"]}
+    return {"held": [{"event_id": i["event_id"], "text": i["payload"]["text"], "ts": i["ts"], "kind": i["kind"],
+                      **({"who": i["who"]} if i.get("who") else {})}
+                     for i in held(room_id) if i["kind"] in ("user", "steer", "next")]}

@@ -19,7 +19,7 @@ CITED = [
     ("(@dofus) et @REA !", ["dofus", "rea"]),
     ("@fz.a puis @fz.", ["fz.a", "fz"]),
     ("@dofus-bot seul", ["dofus-bot"]),
-    ("écris à yoan@dofus.fr", []),
+    ("écris à yoan@example.com", []),
     ("@@dofus", []),
     ("@dofusien n'existe pas", []),
     ("@rea @rea, encore @rea", ["rea"]),

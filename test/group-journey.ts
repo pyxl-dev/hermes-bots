@@ -1,4 +1,4 @@
-// Parcours réel d'un groupe de bots contre le gateway de TEST (test/test-gateway.ts ; défauts listés dans docs/GOAL-enchainement-bots.md).
+// Parcours réel d'un groupe de bots contre le gateway de TEST (test/test-gateway.ts).
 // Il ne tourne QUE sur le gateway de test : il le redémarre pendant une tâche (`test-gateway.ts restart`), ce qu'on ne fait jamais
 // à la prod. Chromium headless isolé, connexion avec le mot de passe de ~/.hermes-test, PWA servie depuis app/ de ce dépôt.
 // SANS MODÈLE : les bots du groupe (profils fx-* pour parallel, fy-* pour fil, fz-* pour restart) appellent le faux modèle déterministe de

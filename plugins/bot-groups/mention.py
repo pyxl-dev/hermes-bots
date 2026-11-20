@@ -25,7 +25,19 @@ from . import _caller, _hub, _log, _rpc, HUB_NOTIFY, fanout, ui_guard
 BUN = Path.home() / ".bun" / "bin" / "bun"
 PWA_SERVER = Path.home() / "Projects" / "hermes-bots-pwa" / "server.ts"
 
-PWA_URL = __import__("os").environ.get("PWA_URL", "http://127.0.0.1:9131/bots/")
+def _pwa_url() -> str:
+    """Origine publique de la PWA : variable PWA_URL, sinon ~/.config/hermes-bots/config.json (hors dépôt)."""
+    import json
+    import os
+
+    try:
+        conf = json.loads((Path.home() / ".config" / "hermes-bots" / "config.json").read_text())
+    except (OSError, ValueError):
+        conf = {}
+    return os.environ.get("PWA_URL") or conf.get("pwaUrl") or "http://127.0.0.1:9131/bots/"
+
+
+PWA_URL = _pwa_url()
 META_KEY = "hermes-bots-mentions"
 KEEP = 20
 MENTION_RE = re.compile(r"(?<![\w@])@yoan\b", re.IGNORECASE)

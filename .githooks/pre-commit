@@ -4,5 +4,6 @@ set -e
 C="sh $(git rev-parse --show-toplevel)/scripts/checks.sh"
 $C served
 $C secrets
+bun "$(git rev-parse --show-toplevel)/scripts/public-guard.ts" staged
 $C static $(git diff --cached --name-only --diff-filter=ACMR)
 $C format $(git diff --cached --name-only --diff-filter=ACMR)

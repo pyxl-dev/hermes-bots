@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { holdTestGateway } from "../test/gateway-lock";
 import { join } from "node:path";
 import { alert, log, LOG_DIR } from "../lib/journal";
+import { PWA_SERVICE } from "../lib/local-config";
 
 const ROOT = join(import.meta.dir, "..");
 const dry = process.argv.includes("--dry-run"),
@@ -175,8 +176,8 @@ const waitFor = async (u: string, needle: RegExp) => {
 if (changed.some((f) => f === "server.ts" || f.startsWith("lib/") || f === "package.json")) {
   // le serveur lui-même change : relance (une seconde de coupure)
   console.log("\n== server.ts a changé : launchctl kickstart");
-  if (!process.env.PWA_SERVICE) stop("server.ts a changé : relance le service à la main, PWA_SERVICE n'est pas posé");
-  sh("launchctl", ["kickstart", "-k", `gui/${process.getuid!()}/${process.env.PWA_SERVICE}`]);
+  if (!PWA_SERVICE) stop("server.ts a changé : relance le serveur à la main (pwaService absent de ~/.config/hermes-bots/config.json)");
+  sh("launchctl", ["kickstart", "-k", `gui/${process.getuid!()}/${PWA_SERVICE}`]);
   if (!(await waitFor(`http://127.0.0.1:${port}/bots/index.html`, "<html"))) stop("le serveur ne répond pas après kickstart");
 }
 {
@@ -241,8 +242,3 @@ if (!(await waitFor(`http://127.0.0.1:${port}/bots/version.js`, served_(version)
 rmSync(PENDING, { force: true });
 log("release", true, `PR ${pr} ${version}`);
 console.log(`\nrelease ok : PR ${pr} mergée, ${version} figée, promue et servie`);
-// Version publique (pyxl-dev/hermes-bots) : exportée depuis le commit servi, nettoyée et auditée par public-sync.ts.
-// La prod est déjà livrée : un refus ici ne la touche pas, il est journalisé et alerté par public-sync.ts lui-même.
-console.log("\n== version publique");
-const pub = spawnSync("bun", ["scripts/public-sync.ts", "push", "--ref", sh("git", ["rev-parse", "HEAD"], served)], { cwd: ROOT, stdio: "inherit" });
-if (pub.status !== 0) console.error("version publique NON envoyée (alerte Hub envoyée) : relancer `bun scripts/public-sync.ts push` une fois corrigé");

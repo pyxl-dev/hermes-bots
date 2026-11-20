@@ -1,21 +1,36 @@
-// Garde du dépôt public : rien de privé n'entre dans un commit, un message, un push, une PR ou une issue.
+// Garde de dépôt public (gabarit LifeOS public-repo-guard) : rien de privé n'entre dans un commit, un message, un push,
+// une PR ou une issue. Copie identique dans chaque dépôt (scripts/public-guard.ts) ; la référence vit dans le gabarit.
 //   bun scripts/public-guard.ts staged          lignes ajoutées à l'index (hook pre-commit)
 //   bun scripts/public-guard.ts msg FICHIER     message de commit (hook commit-msg)
-//   bun scripts/public-guard.ts push REMOTE     refs lues sur stdin comme le hook pre-push : chaque commit poussé
-//                                               (contenu ajouté et message) et refus de tout commit hors de l'histoire publique
+//   bun scripts/public-guard.ts push REMOTE     refs sur stdin comme le hook pre-push : chaque commit poussé (contenu ajouté
+//                                               et message), et refus de tout commit hors de l'histoire publique
 //   bun scripts/public-guard.ts tree            tous les fichiers suivis (CI)
 //   bun scripts/public-guard.ts text            texte lu sur stdin
 //   bun scripts/public-guard.ts claude-hook     hook PreToolUse de Claude Code : texte des commandes gh pr|issue
-// Motifs : génériques ci-dessous (publics), plus ceux de ~/.config/hermes-bots/forbidden.txt (une expression par ligne,
-// propres à une installation, jamais dans le dépôt). Code de sortie 1 (2 pour claude-hook) au moindre motif trouvé.
+// Réglages du dépôt : .public-guard.json { "project": "nom", "publicRoot": "sha du premier commit public" }.
+// Motifs : génériques ci-dessous (publics), plus ceux propres à une installation, jamais dans le dépôt :
+//   ~/.config/public-guard/forbidden.txt (communs à tous les projets) et ~/.config/<project>/forbidden.txt,
+//   une expression régulière par ligne. Sortie 1 (2 pour claude-hook) au moindre motif trouvé.
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { LOCAL_DIR } from "../lib/local-config";
 
-// Premier commit du dépôt public : tout commit poussé doit en descendre. Un commit de l'ancien dépôt privé
-// (pyxl-dev/hermes-bots-pwa, même .git possible sur le Mac) n'en descend pas et publierait tout son historique.
-export const PUBLIC_ROOT = "edd6fa9c8c03a2da1f012031a6b595f48e559b84";
+const git = (args: string[]) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
+const TOP = (() => {
+  try {
+    return git(["rev-parse", "--show-toplevel"]).trim();
+  } catch {
+    return process.cwd();
+  }
+})();
+const CONF: { project?: string; publicRoot?: string } = (() => {
+  try {
+    return JSON.parse(readFileSync(join(TOP, ".public-guard.json"), "utf8"));
+  } catch {
+    return {};
+  }
+})();
 const ZERO = /^0+$/;
 
 type Rule = { name: string; re: RegExp; local?: boolean };
@@ -31,15 +46,19 @@ const GENERIC: Rule[] = [
     re: /\b[\w.+-]+@(?!(?:[\w-]+\.)*(?:example\.(?:com|org|net)|invalid|test|users\.noreply\.github\.com|anthropic\.com|github\.com)\b)[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b/i,
   },
 ];
-const FORBIDDEN = process.env.HERMES_BOTS_FORBIDDEN || join(LOCAL_DIR, "forbidden.txt");
+const FILES = [
+  process.env.PUBLIC_GUARD_FORBIDDEN,
+  join(homedir(), ".config", "public-guard", "forbidden.txt"),
+  CONF.project ? join(homedir(), ".config", CONF.project, "forbidden.txt") : undefined,
+].filter((f): f is string => !!f);
 function rules(): Rule[] {
-  const local = existsSync(FORBIDDEN)
-    ? readFileSync(FORBIDDEN, "utf8")
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l && !l.startsWith("#"))
-        .map((l) => ({ name: "motif perso", re: new RegExp(l), local: true }))
-    : [];
+  const local = FILES.filter(existsSync).flatMap((f) =>
+    readFileSync(f, "utf8")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"))
+      .map((l) => ({ name: "motif perso", re: new RegExp(l), local: true }))
+  );
   return [...GENERIC, ...local];
 }
 // Exception visible dans le diff, pour un motif générique seulement (jamais pour un motif perso).
@@ -53,9 +72,7 @@ export function scan(lines: { where: string; text: string }[], rs = rules()): Hi
   return hits;
 }
 
-const git = (args: string[]) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 1 << 28 });
-
-// Lignes ajoutées d'un diff unifié (git diff ou git log -p), avec fichier et numéro de ligne.
+// Lignes ajoutées d'un diff unifié (git diff ou git show), avec fichier et numéro de ligne.
 function addedLines(diff: string, prefix = ""): { where: string; text: string }[] {
   const out: { where: string; text: string }[] = [];
   let file = "",
@@ -69,12 +86,6 @@ function addedLines(diff: string, prefix = ""): { where: string; text: string }[
   return out;
 }
 
-function commitsOf(range: string[]): string[] {
-  return git(["rev-list", ...range])
-    .split("\n")
-    .filter(Boolean);
-}
-
 export function checkPush(remote: string, input: string): string[] {
   const errors: string[] = [];
   const lines: { where: string; text: string }[] = [];
@@ -82,16 +93,17 @@ export function checkPush(remote: string, input: string): string[] {
     const [localRef, localSha, , remoteSha] = row.split(" ");
     if (!localSha || ZERO.test(localSha)) continue; // suppression d'une branche distante
     const commit = git(["rev-parse", `${localSha}^{commit}`]).trim();
-    try {
-      execFileSync("git", ["merge-base", "--is-ancestor", PUBLIC_ROOT, commit], { stdio: "ignore" });
-    } catch {
-      errors.push(
-        `${localRef} ne descend pas de la racine publique ${PUBLIC_ROOT.slice(0, 7)} : c'est l'histoire de l'ancien dépôt privé, la pousser publierait tout ce qu'elle contient`
-      );
-      continue;
-    }
+    if (CONF.publicRoot)
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", CONF.publicRoot, commit], { stdio: "ignore" });
+      } catch {
+        errors.push(`${localRef} ne descend pas de la racine publique ${CONF.publicRoot.slice(0, 7)} : la pousser publierait une histoire privée`);
+        continue;
+      }
     const range = remoteSha && !ZERO.test(remoteSha) ? [commit, `^${remoteSha}`] : [commit, "--not", `--remotes=${remote}`];
-    for (const c of commitsOf(range)) {
+    for (const c of git(["rev-list", ...range])
+      .split("\n")
+      .filter(Boolean)) {
       const short = c.slice(0, 7);
       git(["log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B", c])
         .split("\n")
@@ -105,16 +117,25 @@ export function checkPush(remote: string, input: string): string[] {
 const fmt = (h: Hit) => `${h.where} (${h.rule}) ${h.line}`;
 const textLines = (s: string, where: string) => s.split("\n").map((text, i) => ({ where: `${where}:${i + 1}`, text }));
 
+// Journal JSONL local (hors dépôt) : chaque refus et chaque erreur de la garde.
+function log(ok: boolean, cause: string) {
+  try {
+    const dir = join(homedir(), ".local", "state", "public-guard");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(
+      join(dir, "actions.jsonl"),
+      JSON.stringify({ ts: new Date().toISOString(), project: CONF.project ?? TOP, action: "public_guard", ok, cause }) + "\n"
+    );
+  } catch {}
+}
+
 function report(problems: string[], what: string, code = 1): never {
   if (!problems.length) process.exit(0);
   console.error(`REFUSÉ (dépôt public) : ${what}`);
   for (const p of problems.slice(0, 30)) console.error("  " + p);
   if (problems.length > 30) console.error(`  ... ${problems.length - 30} de plus`);
-  console.error("Retire la donnée privée (réglage dans ~/.config/hermes-bots/config.json, données de test fictives), ne contourne pas la garde.");
-  try {
-    const { log } = require("../lib/journal");
-    log("public_guard", false, `${what} : ${problems.length} problème(s)`);
-  } catch {}
+  console.error(`Retire la donnée privée (réglage dans ~/.config/${CONF.project ?? "<projet>"}/, données de test fictives), ne contourne pas la garde.`);
+  log(false, `${what} : ${problems.length} problème(s)`);
   process.exit(code);
 }
 
@@ -137,8 +158,9 @@ if (import.meta.main) {
       .split("\n")
       .filter(Boolean)
       .flatMap((f) => {
-        if (!existsSync(f)) return [];
-        const buf = readFileSync(f);
+        const p = join(TOP, f);
+        if (!existsSync(p)) return [];
+        const buf = readFileSync(p);
         return buf.subarray(0, 8000).includes(0) ? [] : textLines(buf.toString("utf8"), f);
       });
     report(scan(lines).map(fmt), "fichiers suivis");

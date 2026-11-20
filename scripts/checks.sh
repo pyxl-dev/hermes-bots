@@ -14,11 +14,15 @@ timed() { name=$1; shift; t=$(date +%s); "$@" || die "$name" "échec ci-dessus";
 
 case "$1" in
   served)
-    served=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
-    [ -z "$CI" ] && [ "$ROOT" = "$served" ] && die "copie servie" "$ROOT est la copie servie (prod). Travaille dans un worktree ; ici on fait seulement git pull via la release."
+    # La copie servie est celle qui porte les versions figées (lien `current`, créé par `bun server.ts stage`) : un clone
+    # de contributeur n'en a pas, il peut y committer.
+    [ -z "$CI" ] && [ -e "$ROOT/current" ] && die "copie servie" "$ROOT est la copie servie (prod). Travaille dans un worktree ; ici on fait seulement git pull via la release."
     echo "  ok  hors de la copie servie" ;;
   secrets)
-    command -v gitleaks >/dev/null || die "secrets" "gitleaks absent : brew install gitleaks"
+    if ! command -v gitleaks >/dev/null; then
+      [ -n "$CI" ] && die "secrets" "gitleaks absent"
+      echo "  ~   gitleaks absent : contrôle des secrets ignoré (brew install gitleaks pour l'activer)"; exit 0
+    fi
     if git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' | grep -v '\.example$' >/dev/null; then die "secrets" "un fichier .env est indexé"; fi
     if [ "$2" = all ]; then timed "gitleaks (historique)" gitleaks git --no-banner --log-level warn --redact .
     else timed "gitleaks (index)" gitleaks git --no-banner --log-level warn --redact --staged --pre-commit .; fi ;;

@@ -76,7 +76,7 @@ For real: `bun server.ts` serves the app on `127.0.0.1:9131`. Put it behind the 
 
 ## Settings
 
-Every value has a local default; nothing is required to try it.
+Every value has a local default; nothing is required to try it. Set each one as an environment variable, or in `~/.config/hermes-bots/config.json` (keys `pwaUrl`, `pwaService`, `prodOrigin`), outside the repo.
 
 | Variable | Default | Role |
 | --- | --- | --- |
@@ -102,8 +102,6 @@ bun run check            # gateway RPC contracts
 ```
 
 Git hooks live in `.githooks/` (installed by `bun install`) and CI replays them. Internal documentation (release, test gateway, real journeys, plugin) is in [docs/MAINTENANCE.md](docs/MAINTENANCE.md), in French.
-
-This repo is the public version of a private working repo, synced automatically on every release.
 
 ## License
 

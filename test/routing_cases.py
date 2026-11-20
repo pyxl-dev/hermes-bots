@@ -19,7 +19,7 @@ CITED = [
     ("(@alpha) et @REA !", ["alpha", "rea"]),
     ("@fz.a puis @fz.", ["fz.a", "fz"]),
     ("@alpha-bot seul", ["alpha-bot"]),
-    ("écris à yoan@alpha.fr", []),
+    ("écris à yoan@example.com", []),
     ("@@alpha", []),
     ("@alphaien n'existe pas", []),
     ("@rea @rea, encore @rea", ["rea"]),

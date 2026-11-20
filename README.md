@@ -76,7 +76,7 @@ Pour de vrai : `bun server.ts` sert l'app sur `127.0.0.1:9131`. Mets-la derrièr
 
 ## Réglages
 
-Toutes les valeurs ont un défaut local, rien n'est obligatoire pour essayer.
+Toutes les valeurs ont un défaut local, rien n'est obligatoire pour essayer. Chacune se pose en variable d'environnement, ou dans `~/.config/hermes-bots/config.json` (clés `pwaUrl`, `pwaService`, `prodOrigin`), hors du dépôt.
 
 | Variable | Défaut | Rôle |
 | --- | --- | --- |
@@ -102,8 +102,6 @@ bun run check            # contrats RPC du gateway
 ```
 
 Hooks git dans `.githooks/` (installés par `bun install`), rejoués par la CI. La documentation interne (livraison, gateway de test, parcours réels, plugin) est dans [docs/MAINTENANCE.md](docs/MAINTENANCE.md).
-
-Ce dépôt est la version publique d'un dépôt de travail privé, synchronisée automatiquement à chaque livraison.
 
 ## Licence
 

@@ -1,6 +1,9 @@
 #!/bin/sh
 # Avant chaque push : APP_VERSION, smoke sur le mock et versions figées (chacun sous 30 s).
 set -e
+# Dépôt public : chaque commit poussé (contenu et message) passe la garde, et doit descendre de la racine publique.
+refs=$(cat)
+printf '%s\n' "$refs" | bun "$(git rev-parse --show-toplevel)/scripts/public-guard.ts" push "$1"
 C="sh $(git rev-parse --show-toplevel)/scripts/checks.sh"
 git fetch -q origin main 2>/dev/null || true
 $C version origin/main

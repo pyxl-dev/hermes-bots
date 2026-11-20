@@ -1,4 +1,4 @@
-"""Fil de travail des bots de groupe (décidé avec Yoan le 2026-11-16, besoin dans la PWA : docs/fil-de-travail.md).
+"""Fil de travail des bots de groupe (décidé avec Yoan le 2026-11-16).
 
 Un fil = ce qu'un bot a fait pour produire un résultat : outils (nom, arguments, sortie) et textes
 intermédiaires. Pas de réflexion. Deux sources :

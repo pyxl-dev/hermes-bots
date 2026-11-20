@@ -24,6 +24,7 @@ import {
 import { execFile, execFileSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { LOG_DIR, LOG, LOG_OLD, log, alert } from "./lib/journal";
+import { PWA_URL } from "./lib/local-config";
 import webpush from "web-push";
 import { join, normalize } from "node:path";
 
@@ -84,7 +85,7 @@ function channelRoot(channel: "current" | "next"): string | null {
 const VAPID = join(LOG_DIR, "vapid.json");
 const SUBS = join(LOG_DIR, "push-subscriptions.json");
 const GATEWAY = process.env.HERMES_GATEWAY || "http://127.0.0.1:9120"; // la variable ne sert qu'aux essais locaux
-const SUBJECT = process.env.PWA_URL || "http://127.0.0.1:9131/bots/"; // origine publique de la PWA, à poser chez soi
+const SUBJECT = PWA_URL; // origine publique de la PWA : lib/local-config.ts
 // Écriture atomique (fichier temporaire puis rename) : un arrêt en pleine écriture laissait un JSON tronqué.
 function writeSecret(file: string, data: unknown) {
   const tmp = `${file}.${process.pid}.tmp`;

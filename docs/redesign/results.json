@@ -1,0 +1,75 @@
+{
+ "results": [
+  {
+   "name": "appui long épingle",
+   "pass": true,
+   "detail": "2 -> 3"
+  },
+  {
+   "name": "appui long sur tuile désépingle",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "envoi : message affiché",
+   "pass": true,
+   "detail": "[\"Bonjour, test d'envoi\"]"
+  },
+  {
+   "name": "envoi : une réponse arrive",
+   "pass": true,
+   "detail": "3 bulles bot"
+  },
+  {
+   "name": "feuille d'actions visible",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "personnage enregistré en local",
+   "pass": true,
+   "detail": "{\"hermes-hard\":{\"color\":\"#FF7AB6\",\"kind\":\"ghost\"}}"
+  },
+  {
+   "name": "personnage enregistré sur le serveur (prefs.avatars)",
+   "pass": true,
+   "detail": "{\"hermes-hard\":{\"color\":\"#FF7AB6\",\"kind\":\"ghost\"}}"
+  },
+  {
+   "name": "groupe : barre répond visible pendant le tour",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "réglages : équipes visibles",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "retour réglages vers liste",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "personnage survit au rechargement",
+   "pass": true,
+   "detail": "{\"color\":\"#FF7AB6\",\"kind\":\"ghost\"}"
+  },
+  {
+   "name": "personnage survit au vidage du stockage local (prefs serveur)",
+   "pass": true,
+   "detail": "{\"color\":\"#FF7AB6\",\"kind\":\"ghost\"}"
+  },
+  {
+   "name": "épingles resynchronisées après vidage",
+   "pass": true,
+   "detail": ""
+  },
+  {
+   "name": "aucune erreur console",
+   "pass": true,
+   "detail": ""
+  }
+ ],
+ "errors": []
+}

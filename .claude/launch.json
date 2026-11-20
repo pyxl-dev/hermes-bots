@@ -1,0 +1,4 @@
+{
+  "version": "0.0.1",
+  "configurations": [{ "name": "mock", "runtimeExecutable": "bun", "runtimeArgs": ["test/mock-gateway.ts"], "port": 8790, "url": "http://127.0.0.1:8790" }]
+}

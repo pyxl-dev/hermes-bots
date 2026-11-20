@@ -11,6 +11,7 @@
 import { COMPAT_INIT } from "./compat";
 import { chromium, type Page } from "playwright-core";
 import { alert, log } from "../lib/journal";
+import { PROD_ORIGIN } from "../lib/local-config";
 import { openTestSession } from "./test-session";
 import { holdTestGateway } from "./gateway-lock";
 
@@ -25,7 +26,6 @@ if (TARGET !== "test" && TARGET !== "prod") {
 }
 const PATH = arg("path", "/bots-next/"),
   CDP = arg("cdp", "http://127.0.0.1:9334"),
-  PROD_ORIGIN = process.env.PROD_ORIGIN || "http://127.0.0.1:9131",
   APP = arg("app", "");
 const steps: string[] = [];
 const mark = (s: string) => {

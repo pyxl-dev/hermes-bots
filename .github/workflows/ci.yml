@@ -31,6 +31,10 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: Chromium headless (installation)
         run: bunx playwright-core install --with-deps chromium-headless-shell
+      - name: Dépôt public (fichiers suivis, messages de la PR)
+        run: |
+          bun scripts/public-guard.ts tree
+          if [ "${{ github.event_name }}" = pull_request ]; then git log --format='%an <%ae>%n%B' origin/${{ github.base_ref }}..HEAD | bun scripts/public-guard.ts text; fi
       - name: Secrets (tout l'historique)
         run: sh scripts/checks.sh secrets all
       - name: Types, syntaxe, ruff, contrats

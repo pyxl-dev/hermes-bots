@@ -460,7 +460,13 @@ const server = Bun.serve({
       t.live = {
         at: 1200,
         cps: 30,
-        text: "Les tests passent : 12 sur 12. Je résume ce qui a changé dans la branche et ce qu'il reste à vérifier avant le merge.",
+        // texte long (~14 s à 30 signes/s) : sous charge (smoke bots et groupes en parallèle, hook pre-push), les attentes
+        // d'avant mangeaient une fenêtre de 4 s et le smoke ne voyait plus les deux bulles en cours (2026-11-26)
+        text:
+          "Les tests passent : 12 sur 12. Je résume ce qui a changé dans la branche et ce qu'il reste à vérifier avant le merge. " +
+          "Le client lit maintenant la configuration au démarrage, le serveur garde la session ouverte pendant les reconnexions, " +
+          "et le journal note chaque échec avec sa cause. Il reste à rejouer le parcours complet sur le gateway de test, " +
+          "à relire le diff des contrats et à mettre à jour la note de version avant de demander la fusion.",
       };
       const dj = ((globalThis as any).dispatchJobs ??= {});
       (dj[b.room_id] ??= []).push({

@@ -113,6 +113,7 @@ const tickets = new Set<string>();
 const sockets = new Set<any>();
 const ticketLog: number[] = [];
 let refuse = 0,
+  signedOut = false,
   failSubmit = 0,
   slowHistory = 0,
   historyPending = 0,
@@ -359,6 +360,10 @@ const server = Bun.serve({
       refuse = Number(u.searchParams.get("n") || 0);
       return Response.json({ refuse });
     } // refuse les n prochains tickets (503)
+    if (u.pathname === "/api/mock/signed-out") {
+      signedOut = u.searchParams.get("on") !== "0";
+      return Response.json({ signedOut });
+    } // jeton navigateur remplacé : chaque ticket répond 401 signed_out, comme le gateway après un sign-out
     if (u.pathname === "/api/mock/tickets") return Response.json(ticketLog);
     if (u.pathname === "/api/mock/slow-history") {
       slowHistory = Number(u.searchParams.get("ms") || 800);
@@ -372,6 +377,7 @@ const server = Bun.serve({
     } // les n prochains prompt.submit échouent franchement (pas une coupure)
     if (u.pathname === "/api/webapp/socket-ticket" && req.method === "POST") {
       ticketLog.push(Date.now());
+      if (signedOut) return Response.json({ detail: "Unauthorized", reason: "signed_out" }, { status: 401 });
       if (refuse > 0) {
         refuse--;
         return new Response("indisponible", { status: 503 });
@@ -454,7 +460,13 @@ const server = Bun.serve({
       t.live = {
         at: 1200,
         cps: 30,
-        text: "Les tests passent : 12 sur 12. Je résume ce qui a changé dans la branche et ce qu'il reste à vérifier avant le merge.",
+        // texte long (~14 s à 30 signes/s) : sous charge (smoke bots et groupes en parallèle, hook pre-push), les attentes
+        // d'avant mangeaient une fenêtre de 4 s et le smoke ne voyait plus les deux bulles en cours (2026-11-26)
+        text:
+          "Les tests passent : 12 sur 12. Je résume ce qui a changé dans la branche et ce qu'il reste à vérifier avant le merge. " +
+          "Le client lit maintenant la configuration au démarrage, le serveur garde la session ouverte pendant les reconnexions, " +
+          "et le journal note chaque échec avec sa cause. Il reste à rejouer le parcours complet sur le gateway de test, " +
+          "à relire le diff des contrats et à mettre à jour la note de version avant de demander la fusion.",
       };
       const dj = ((globalThis as any).dispatchJobs ??= {});
       (dj[b.room_id] ??= []).push({

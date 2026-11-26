@@ -152,10 +152,20 @@ export function Home(p: { onSettings: () => void; onNewGroup: () => void }) {
     <section id="roster" class="view home" data-testid="home">
       <header class="bar top">
         <h1>Bots</h1>
-        <span class={"conn " + (app.conn.on ? "on" : app.conn.why ? "off restart" : "off")} title="Connexion" data-testid="conn">
-          <i />
-          <b>{connLabel()}</b>
-        </span>
+        <Show
+          when={app.conn.why === "auth"}
+          fallback={
+            <span class={"conn " + (app.conn.on ? "on" : app.conn.why ? "off restart" : "off")} title="Connexion" data-testid="conn">
+              <i />
+              <b>{connLabel()}</b>
+            </span>
+          }
+        >
+          <a class="conn off restart" href={loginUrl} title="Se reconnecter à Hermes" data-testid="conn">
+            <i />
+            <b>{connLabel()}</b>
+          </a>
+        </Show>
         <button class="icon-btn" type="button" aria-label="Réglages" onClick={p.onSettings}>
           <IcSettings />
         </button>

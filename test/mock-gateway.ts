@@ -113,6 +113,7 @@ const tickets = new Set<string>();
 const sockets = new Set<any>();
 const ticketLog: number[] = [];
 let refuse = 0,
+  signedOut = false,
   failSubmit = 0,
   slowHistory = 0,
   historyPending = 0,
@@ -359,6 +360,10 @@ const server = Bun.serve({
       refuse = Number(u.searchParams.get("n") || 0);
       return Response.json({ refuse });
     } // refuse les n prochains tickets (503)
+    if (u.pathname === "/api/mock/signed-out") {
+      signedOut = u.searchParams.get("on") !== "0";
+      return Response.json({ signedOut });
+    } // jeton navigateur remplacé : chaque ticket répond 401 signed_out, comme le gateway après un sign-out
     if (u.pathname === "/api/mock/tickets") return Response.json(ticketLog);
     if (u.pathname === "/api/mock/slow-history") {
       slowHistory = Number(u.searchParams.get("ms") || 800);
@@ -372,6 +377,7 @@ const server = Bun.serve({
     } // les n prochains prompt.submit échouent franchement (pas une coupure)
     if (u.pathname === "/api/webapp/socket-ticket" && req.method === "POST") {
       ticketLog.push(Date.now());
+      if (signedOut) return Response.json({ detail: "Unauthorized", reason: "signed_out" }, { status: 401 });
       if (refuse > 0) {
         refuse--;
         return new Response("indisponible", { status: 503 });

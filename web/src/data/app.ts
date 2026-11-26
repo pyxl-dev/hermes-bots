@@ -28,7 +28,7 @@ export const [app, setApp] = createStore({
   activity: { bots: {} as Record<string, string>, rooms: {} as Record<string, string> },
   /** conversation ouverte qui travaille (clé : nom du bot ou room:<id>) */
   live: { key: "", busy: false },
-  conn: { on: false, why: "" as "" | "retry" | "restart" | "unreachable" },
+  conn: { on: false, why: "" as "" | "retry" | "restart" | "unreachable" | "auth" },
   rosterMsg: { text: "", login: false },
   groupsMsg: "",
   q: "",
@@ -177,7 +177,9 @@ async function activeList(name: string) {
   return (await gw.call("session.active_list", {}, 8000)).sessions || [];
 }
 export async function refreshActivity() {
-  if (activity.busy || !app.bots.length) return;
+  // sans socket principal (session expirée, gateway absent), un ticket par bot toutes les 5 s ne ferait que des refus
+  // (vu le 2026-11-26 : ~4 refus « signed_out » par seconde après le remplacement du jeton navigateur)
+  if (activity.busy || !app.bots.length || !roster.gw?.up) return;
   activity.busy = true;
   try {
     const bots = app.bots.filter((b) => !isHidden(b));
@@ -264,7 +266,7 @@ const isDraining = (e: any) => /ticket 50[234]|runtime_draining|draining|gateway
 // navigateur (« Failed to fetch » Chrome, « Load failed » Safari, « NetworkError » Firefox). Vu le 2026-11-18 : Tailscale coupé.
 const isUnreachable = (e: any) => e instanceof TypeError && /failed to fetch|load failed|networkerror|network request failed/i.test(e.message);
 export const UNREACHABLE_MSG = "Mac injoignable : vérifie que Tailscale est connecté sur ce téléphone. L'app se reconnecte seule.";
-export function setConn(on: boolean, why: "" | "retry" | "restart" | "unreachable" = "") {
+export function setConn(on: boolean, why: "" | "retry" | "restart" | "unreachable" | "auth" = "") {
   setApp("conn", { on, why: on ? "" : why });
 }
 export function connLabel() {
@@ -275,9 +277,11 @@ export function connLabel() {
       ? "gateway en redémarrage"
       : c.why === "unreachable"
         ? "Mac injoignable"
-        : c.why === "retry"
-          ? "reconnexion…"
-          : "hors ligne";
+        : c.why === "auth"
+          ? "session expirée"
+          : c.why === "retry"
+            ? "reconnexion…"
+            : "hors ligne";
 }
 function retryRoster(ms: number) {
   clearTimeout(roster.retry);
@@ -288,6 +292,7 @@ function retryRoster(ms: number) {
 }
 export function handleError(e: any) {
   if (e instanceof AuthError) {
+    setConn(false, "auth");
     setApp("rosterMsg", { text: "Session Hermes expirée.", login: true });
     return;
   }
